@@ -17,6 +17,23 @@ import sys
 import requests
 from playwright.sync_api import sync_playwright
 
+
+def _load_dotenv():
+    """스크립트와 같은 폴더의 .env를 읽어 환경변수로 채운다(이미 설정된 값은 유지).
+    → GitHub Actions에선 Secrets(환경변수)가 우선, 로컬에선 .env로 실행 가능."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.exists(path):
+        return
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())   # 기존 환경변수 우선
+
+
+_load_dotenv()
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
