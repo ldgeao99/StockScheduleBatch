@@ -1,6 +1,6 @@
 """finviz 맵(All Stocks / Market Cap)을 헤드리스 크롬으로 캡처해 텔레그램으로 전송.
 
-GitHub Actions 배치용(매일 07:00 KST = 22:00 UTC). finviz 맵은 정적 이미지가
+GitHub Actions 배치용(매일 04:00 KST = 19:00 UTC). finviz 맵은 정적 이미지가
 아니라 페이지에서 canvas로 그려지므로, 실제 브라우저로 렌더링한 뒤 map canvas를
 스크린샷으로 뜬다. 덕분에 URL의 날짜/시간값을 알 필요 없이 '항상 최신 맵'을 얻는다.
 (맵 안에 'as of ... ET' 시각이 함께 그려져 있어 이미지만으로 시점 확인 가능)
@@ -66,9 +66,11 @@ USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
 
-def capture(page, page_url, render_wait_ms=3500, timeout_ms=45000):
+def capture(page, page_url, render_wait_ms=5000, timeout_ms=45000):
     """map 페이지를 열어 map canvas(canvas.chart)를 PNG bytes로 반환."""
-    page.goto(page_url, wait_until="networkidle", timeout=timeout_ms)
+    # finviz map은 광고/지속 네트워크 요청이 있어 'networkidle'에 도달하지 못해
+    # goto가 타임아웃난다. DOM 로드까지만 기다린 뒤, canvas 등장 + 렌더 여유로 처리.
+    page.goto(page_url, wait_until="domcontentloaded", timeout=timeout_ms)
     for sel in CONSENT_SELECTORS:
         try:
             btn = page.locator(sel).first
@@ -79,6 +81,11 @@ def capture(page, page_url, render_wait_ms=3500, timeout_ms=45000):
         except Exception:
             pass
     page.wait_for_selector("canvas.chart", timeout=timeout_ms)
+    # 데이터 로딩이 잦아들도록 잠깐만 시도(도달 못 해도 무시 - 하드 실패 방지)
+    try:
+        page.wait_for_load_state("networkidle", timeout=8000)
+    except Exception:
+        pass
     page.wait_for_timeout(render_wait_ms)   # 그리기 여유
     return page.locator("canvas.chart").screenshot()
 
