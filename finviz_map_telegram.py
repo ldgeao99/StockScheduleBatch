@@ -66,6 +66,21 @@ USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
 
+# map canvas 위에 겹쳐 뜨는 finviz 안내 팝오버(Matrix/"Why Is It Moving")와
+# Elite 업그레이드 모달을 숨긴다. 파란 팝오버는 div[role=dialog].bg-blue-500,
+# Elite 모달은 native <dialog open>. (상단 배너/네비는 canvas 밖이라 캡처 안 됨)
+_HIDE_POPUP_CSS = 'dialog[open], div[role="dialog"].bg-blue-500{display:none !important;}'
+
+
+def _dismiss_popups(page):
+    """안내 팝오버/모달을 CSS로 숨기고 열린 dialog는 닫는다(best-effort)."""
+    try:
+        page.add_style_tag(content=_HIDE_POPUP_CSS)
+        page.evaluate("document.querySelectorAll('dialog').forEach(d=>{try{d.close()}catch(e){}})")
+    except Exception:
+        pass
+
+
 def capture(page, page_url, render_wait_ms=5000, timeout_ms=45000):
     """map 페이지를 열어 map canvas(canvas.chart)를 PNG bytes로 반환."""
     # finviz map은 광고/지속 네트워크 요청이 있어 'networkidle'에 도달하지 못해
@@ -81,12 +96,14 @@ def capture(page, page_url, render_wait_ms=5000, timeout_ms=45000):
         except Exception:
             pass
     page.wait_for_selector("canvas.chart", timeout=timeout_ms)
+    _dismiss_popups(page)   # 안내 팝오버/Elite 모달 숨김(늦게 떠도 CSS로 커버)
     # 데이터 로딩이 잦아들도록 잠깐만 시도(도달 못 해도 무시 - 하드 실패 방지)
     try:
         page.wait_for_load_state("networkidle", timeout=8000)
     except Exception:
         pass
     page.wait_for_timeout(render_wait_ms)   # 그리기 여유
+    _dismiss_popups(page)   # 렌더 대기 중 늦게 뜬 팝업 한 번 더 정리
     return page.locator("canvas.chart").screenshot()
 
 
