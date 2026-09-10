@@ -17,6 +17,12 @@ import sys
 import requests
 from playwright.sync_api import sync_playwright
 
+try:
+    from google.cloud import firestore
+except Exception:
+    firestore = None
+from crawler_schedule import update_my_schedule
+
 
 def _load_dotenv():
     """스크립트와 같은 폴더의 .env를 읽어 환경변수로 채운다(이미 설정된 값은 유지).
@@ -36,6 +42,19 @@ def _load_dotenv():
 _load_dotenv()
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+
+# 파이어베이스 엔진 초기화(다른 배치와 동일 패턴). 키 없거나 실패 시 db=None → 기록만 생략.
+FIREBASE_KEY_PATH = "stockcalender-13042-firebase-adminsdk-fbsvc-18b1748d9a.json"
+db = None
+if firestore and os.path.exists(FIREBASE_KEY_PATH):
+    try:
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = FIREBASE_KEY_PATH
+        db = firestore.Client(project="stockcalender-13042")
+    except Exception as e:
+        print(f"[finviz] Firestore 초기화 실패(로그/일정 기록 생략): {e}", file=sys.stderr)
+logs_ref = db.collection("crawler_logs") if db else None
+
+TASK_NAME = "[finviz_map_telegram] Finviz 시장 히트맵 텔레그램 전송"
 
 # 보낼 맵: (표시이름, finviz map 페이지 URL)
 MAPS = [
@@ -119,11 +138,35 @@ def send_photo(png_bytes, caption):
         raise RuntimeError(f"Telegram HTTP {resp.status_code} - {resp.text}")
 
 
+def _log_result(status, sent, failed, message):
+    """crawler_logs 에 실행 결과 기록(다른 배치와 동일 컬렉션/필드). best-effort."""
+    if not logs_ref:
+        return
+    try:
+        logs_ref.add({
+            "timestamp": firestore.SERVER_TIMESTAMP,
+            "status": status,
+            "task_name": TASK_NAME,
+            "added_count": sent,
+            "failed_count": failed,
+            "skipped_count": 0,
+            "message": message,
+        })
+    except Exception as e:
+        print(f"[finviz] 로그 기록 실패: {e}", file=sys.stderr)
+
+
 def main():
+    # 전송 성공/실패와 무관하게 '다음 실행 예정시간'을 crawler_schedules 에 기록
+    update_my_schedule(db, __file__, display_name=TASK_NAME)
+
     if not BOT_TOKEN or not CHAT_ID:
-        print("[finviz] TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 미설정", file=sys.stderr)
+        msg = "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 미설정"
+        print(f"[finviz] {msg}", file=sys.stderr)
+        _log_result("FAILED", 0, len(MAPS), msg)
         sys.exit(1)
 
+    sent = 0
     failures = 0
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=LAUNCH_ARGS)
@@ -139,6 +182,7 @@ def main():
                     png = capture(page, url)
                     page.close()
                     send_photo(png, f"📊 Finviz 맵 ({label}, 1D)")
+                    sent += 1
                     print(f"  → 전송 완료: {label}")
                 except Exception as e:
                     failures += 1
@@ -146,6 +190,9 @@ def main():
         finally:
             browser.close()
 
+    status = "SUCCESS" if failures == 0 else "FAILED"
+    _log_result(status, sent, failures,
+                f"Finviz 맵 텔레그램 전송 - 성공 {sent}건 / 실패 {failures}건")
     sys.exit(1 if failures else 0)
 
 
