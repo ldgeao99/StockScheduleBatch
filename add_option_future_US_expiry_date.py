@@ -23,7 +23,7 @@ QUAD_WITCHING_MONTHS = {3, 6, 9, 12}
 
 QUAD_WITCHING_EVENT_NAME = "미국 선옵 동시만기일(네 마녀의 날)"
 QUAD_WITCHING_DETAIL = (
-    "3, 6, 9, 12월의 3번째 금요일\n"
+    "3, 6, 9, 12월의 3번째 금요일\n\n"
     "만기가 되는 대표적인 상품은 나스닥100 선물/옵션, 개별주식 선물/옵션"
 )
 
