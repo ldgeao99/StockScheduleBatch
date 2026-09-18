@@ -29,7 +29,7 @@ QUAD_WITCHING_DETAIL = (
 
 OPTION_EXPIRY_EVENT_NAME = "미국 옵션 만기일"
 OPTION_EXPIRY_DETAIL = (
-    "매 월의 3번째 금요일\n"
+    "매 월의 3번째 금요일\n\n"
     "만기가 되는 대표적인 상품은 지수/주식 옵션"
 )
 
