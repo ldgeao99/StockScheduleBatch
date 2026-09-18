@@ -163,7 +163,7 @@ def run_option_expiry_crawler():
             "added_count": success_count,
             "updated_count": update_count,
             "skipped_count": skip_count,
-            "message": f"옵션만기일 일정 생성기 실패 에러 로그: {error_msg}"
+            "message": f"한국 선옵만기일 일정 생성 실패 에러 로그: {error_msg}"
         })
 
 
