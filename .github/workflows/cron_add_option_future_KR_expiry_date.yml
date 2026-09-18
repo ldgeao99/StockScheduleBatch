@@ -1,4 +1,4 @@
-name: add_option_future_expiry_date (Monthly)
+name: add_option_future_KR_expiry_date (Monthly)
 
 on:
   schedule:
@@ -31,4 +31,4 @@ jobs:
 
     - name: Run Option Expiry Calendar Generator
       run: |
-        python add_option_future_expiry_date.py
+        python add_option_future_KR_expiry_date.py
