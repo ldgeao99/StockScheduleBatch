@@ -141,7 +141,7 @@ def run_option_expiry_crawler():
         log_payload = {
             "timestamp": firestore.SERVER_TIMESTAMP,
             "status": "SUCCESS",
-            "task_name": "[add_option_expiry_calendar] 국내 옵션만기일 일정 생성",
+            "task_name": "[add_option_future_KR_expiry_date] 국내 선옵 만기일 일정 생성",
             "added_count": success_count,
             "updated_count": update_count,
             "skipped_count": skip_count,
@@ -159,7 +159,7 @@ def run_option_expiry_crawler():
         logs_ref.add({
             "timestamp": firestore.SERVER_TIMESTAMP,
             "status": "FAILED",
-            "task_name": "[crawl_option_expiry_calendar] 국내 옵션만기일 일정 생성",
+            "task_name": "[add_option_future_KR_expiry_date] 국내 선옵 만기일 일정 생성",
             "added_count": success_count,
             "updated_count": update_count,
             "skipped_count": skip_count,
@@ -169,7 +169,7 @@ def run_option_expiry_crawler():
 
 if __name__ == "__main__":
     # 실행 시 이 배치 자신의 다음 실행 예정시간만 Firestore(crawler_schedules)에 기록
-    update_my_schedule(db, __file__, display_name="국내 옵션만기일 일정 생성")
+    update_my_schedule(db, __file__, display_name="국내 선옵 만기일 일정 생성")
 
     # cron('0 0 1 * *')이 UTC·KST 모두 1일이라 별도 날짜 가드 없이 바로 실행
     run_option_expiry_crawler()
