@@ -28,8 +28,8 @@ logs_ref = db.collection("crawler_logs") if db else None
 
 TASK_NAME = "[crawl_btc_etf_flow] 비트코인 ETF 순매수 수집"
 
-# 최근 2주(14일)치만 유지. 이 일수보다 오래된 문서는 삭제.
-RETENTION_DAYS = 14
+# 최근 14건(최신 날짜 기준)만 유지. 이보다 오래된 날짜의 문서는 삭제.
+RETENTION_COUNT = 14
 
 URL = "https://farside.co.uk/btc/"
 
@@ -95,11 +95,10 @@ def fetch_btc_etf_flows():
 
 def run_btc_etf_flow_crawler():
     kst_now = datetime.utcnow() + timedelta(hours=9)
-    cutoff = (kst_now.date() - timedelta(days=RETENTION_DAYS)).strftime("%Y-%m-%d")
 
     print("\n" + "=" * 60)
     print(f"[{kst_now.strftime('%Y-%m-%d %H:%M:%S')} KST] 🚀 비트코인 ETF 순매수 수집 크롤러 가동")
-    print(f"🎯 컬렉션: btc_etf_flows | 최근 {RETENTION_DAYS}일치 유지(기준: {cutoff} 이후)")
+    print(f"🎯 컬렉션: btc_etf_flows | 최근 {RETENTION_COUNT}건 유지")
     print("=" * 60)
 
     added = updated = skipped = 0
@@ -118,8 +117,6 @@ def run_btc_etf_flow_crawler():
             # 기존 문서 1회 읽어 비교(변경분만 기록) + prune 에 재사용
             existing = {doc.id: doc.to_dict() for doc in flows_ref.stream()}
             for iso, raw, net in rows:
-                if iso < cutoff:
-                    continue  # 2주보다 오래된 데이터는 저장하지 않음
                 prev = existing.get(iso)
                 if prev and prev.get("netFlow") == net and prev.get("rawTotal") == raw:
                     skipped += 1
@@ -139,13 +136,13 @@ def run_btc_etf_flow_crawler():
                     added += 1
                     print(f"✅  [신규] {iso} | {raw} → {net}")
 
-            # 보관기간(2주) 초과 문서 삭제
-            for did in existing:
-                if did < cutoff:
-                    flows_ref.document(did).delete()
-                    pruned += 1
+            # 최신 RETENTION_COUNT 건만 유지 (날짜 내림차순 정렬 후 초과분 삭제)
+            all_ids = sorted(set(existing) | {r[0] for r in rows}, reverse=True)
+            for did in all_ids[RETENTION_COUNT:]:
+                flows_ref.document(did).delete()
+                pruned += 1
             if pruned:
-                print(f"🧹 보관기간({RETENTION_DAYS}일) 초과 {pruned}건 삭제 (기준: {cutoff} 이전)")
+                print(f"🧹 최근 {RETENTION_COUNT}건 초과 {pruned}건 삭제")
         print("-" * 60)
 
         if logs_ref:
