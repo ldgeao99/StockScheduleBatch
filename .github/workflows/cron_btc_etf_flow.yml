@@ -1,0 +1,35 @@
+name: crawl_btc_etf_flow (Tue-Sat)
+
+on:
+  schedule:
+    # 한국 시간(KST) 화~토 매일 새벽 04시 실행.
+    # KST 04:00 = 전날 19:00 UTC 이므로, UTC 기준 월~금(1-5) 19:00 에 걸면
+    # KST 로는 화~토 04:00 이 된다. (KST는 서머타임 없음)
+    - cron: '0 19 * * 1-5'
+  workflow_dispatch: # 필요 시 깃허브 액션 웹에서 수동 실행 가능 버튼 활성화
+
+jobs:
+  run-crawler:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install beautifulsoup4 google-cloud-firestore curl_cffi
+
+    - name: Decode Firebase Key
+      run: |
+        echo "${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}" | base64 --decode > stockcalender-13042-firebase-adminsdk-fbsvc-18b1748d9a.json
+
+    - name: Run BTC ETF Flow Crawler
+      run: |
+        python crawl_btc_etf_flow.py
