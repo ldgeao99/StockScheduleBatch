@@ -1,6 +1,6 @@
 """finviz 맵(All Stocks / Market Cap)을 헤드리스 크롬으로 캡처해 텔레그램으로 전송.
 
-GitHub Actions 배치용(매일 04:00 KST = 19:00 UTC). finviz 맵은 정적 이미지가
+GitHub Actions 배치용(화~토 04:00 KST = 월~금 19:00 UTC). finviz 맵은 정적 이미지가
 아니라 페이지에서 canvas로 그려지므로, 실제 브라우저로 렌더링한 뒤 map canvas를
 스크린샷으로 뜬다. 덕분에 URL의 날짜/시간값을 알 필요 없이 '항상 최신 맵'을 얻는다.
 (맵 안에 'as of ... ET' 시각이 함께 그려져 있어 이미지만으로 시점 확인 가능)
