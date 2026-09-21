@@ -18,13 +18,14 @@ logs_ref = db.collection("crawler_logs")
 CATEGORY_NAME = "일반"
 
 # 매월 (일자, 일정명, 세부내용). 관세청 수출입데이터 발표는 매월 1·11·21일.
+_HOLIDAY_NOTE = "\n\n* 발표일이 휴일이라면 다음 영업일에 발표"
 RELEASES = [
     (1, "수출입데이터 발표(전월 전체 잠정치)",
-     "관세청 오전 9시 발표, 전월 21일~말일 포함 전월 전체 잠정치"),
+     "관세청 오전 9시 발표, 전월 21일~말일 포함 전월 전체 잠정치" + _HOLIDAY_NOTE),
     (11, "수출입데이터 발표(당월 1~10일 잠정치)",
-     "관세청 오전 9시 발표, 당월 1~10일 잠정치"),
+     "관세청 오전 9시 발표, 당월 1~10일 잠정치" + _HOLIDAY_NOTE),
     (21, "수출입데이터 발표(당월 1~20일 잠정치)",
-     "관세청 오전 9시 발표, 당월 1~20일 잠정치"),
+     "관세청 오전 9시 발표, 당월 1~20일 잠정치" + _HOLIDAY_NOTE),
 ]
 
 
@@ -67,16 +68,13 @@ def run_trade_data_crawler():
 
                 if len(existing_docs) > 0:
                     doc = existing_docs[0]
-                    existing_data = doc.to_dict()
-                    # 세부내용이 최신이고 검증 표시(isVerified)까지 되어 있으면 스킵, 아니면 갱신
-                    if (existing_data.get("detail") == detail
-                            and existing_data.get("isVerified") is True):
+                    if doc.to_dict().get("detail") == detail:
                         print(f"⏭️  [중복 스킵] 날짜: {db_date_str} | 이미 존재합니다.")
                         skip_count += 1
                     else:
-                        doc.reference.update({"detail": detail, "isVerified": True, "url": ""})
+                        doc.reference.update({"detail": detail, "url": ""})
                         update_count += 1
-                        print(f"🔄  [정보 업데이트] 날짜: {db_date_str} | 세부내용/검증표시를 갱신했습니다.")
+                        print(f"🔄  [정보 업데이트] 날짜: {db_date_str} | 세부내용을 갱신했습니다.")
                 else:
                     payload = {
                         "date": db_date_str,
@@ -84,8 +82,7 @@ def run_trade_data_crawler():
                         "eventName": event_name,
                         "detail": detail,
                         "relatedStocks": "",
-                        "url": "",
-                        "isVerified": True
+                        "url": ""
                     }
                     events_ref.add(payload)
                     success_count += 1
