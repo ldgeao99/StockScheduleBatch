@@ -96,13 +96,15 @@ def run_dividend_deadline_crawler():
 
             if len(existing_docs) > 0:
                 doc = existing_docs[0]
-                if doc.to_dict().get("detail") == detail:
+                existing_data = doc.to_dict()
+                # 세부내용이 최신이고 중요표시(isImportant)까지 되어 있으면 스킵, 아니면 갱신
+                if existing_data.get("detail") == detail and existing_data.get("isImportant") is True:
                     print(f"⏭️  [중복 스킵] 날짜: {db_date_str} | 이미 존재합니다.")
                     skip_count += 1
                 else:
-                    doc.reference.update({"detail": detail, "url": ""})
+                    doc.reference.update({"detail": detail, "isImportant": True, "url": ""})
                     update_count += 1
-                    print(f"🔄  [정보 업데이트] 날짜: {db_date_str} | 세부내용을 갱신했습니다.")
+                    print(f"🔄  [정보 업데이트] 날짜: {db_date_str} | 세부내용/중요표시를 갱신했습니다.")
             else:
                 payload = {
                     "date": db_date_str,
@@ -110,7 +112,8 @@ def run_dividend_deadline_crawler():
                     "eventName": event_name,
                     "detail": detail,
                     "relatedStocks": "",
-                    "url": ""
+                    "url": "",
+                    "isImportant": True
                 }
                 events_ref.add(payload)
                 success_count += 1
