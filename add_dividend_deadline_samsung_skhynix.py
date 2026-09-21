@@ -52,12 +52,15 @@ COMPANY_BY_MONTH = {
 
 
 def build_target_months(base_date: datetime):
-    this_year, this_month = base_date.year, base_date.month
-    if this_month == 12:
-        next_year, next_month = this_year + 1, 1
-    else:
-        next_year, next_month = this_year, this_month + 1
-    return [(this_year, this_month), (next_year, next_month)]
+    """이번달·다음달·다다음달(총 3개월)을 (연, 월) 리스트로 반환."""
+    months = []
+    y, mth = base_date.year, base_date.month
+    for _ in range(3):
+        months.append((y, mth))
+        mth += 1
+        if mth == 13:
+            mth, y = 1, y + 1
+    return months
 
 
 def run_dividend_deadline_crawler():
