@@ -17,6 +17,9 @@ logs_ref = db.collection("crawler_logs")
 
 CATEGORY_NAME = "일반"
 
+# 일정 링크(관세청 수출입 무역통계 공지 게시판)
+EVENT_URL = "https://www.customs.go.kr/kcs/na/ntt/selectNttList.do?mi=2891&bbsId=1362"
+
 # 매월 (일자, 일정명, 세부내용). 관세청 수출입데이터 발표는 매월 1·11·21일.
 _HOLIDAY_NOTE = "\n\n* 발표일이 휴일이라면 다음 영업일에 발표"
 RELEASES = [
@@ -69,14 +72,16 @@ def run_trade_data_crawler():
                 if len(existing_docs) > 0:
                     doc = existing_docs[0]
                     existing_data = doc.to_dict()
-                    # 세부내용이 최신이고 중요표시(isImportant)까지 되어 있으면 스킵, 아니면 갱신
-                    if existing_data.get("detail") == detail and existing_data.get("isImportant") is True:
+                    # 세부내용·중요표시·링크가 모두 최신이면 스킵, 아니면 갱신
+                    if (existing_data.get("detail") == detail
+                            and existing_data.get("isImportant") is True
+                            and existing_data.get("url") == EVENT_URL):
                         print(f"⏭️  [중복 스킵] 날짜: {db_date_str} | 이미 존재합니다.")
                         skip_count += 1
                     else:
-                        doc.reference.update({"detail": detail, "isImportant": True, "url": ""})
+                        doc.reference.update({"detail": detail, "isImportant": True, "url": EVENT_URL})
                         update_count += 1
-                        print(f"🔄  [정보 업데이트] 날짜: {db_date_str} | 세부내용/중요표시를 갱신했습니다.")
+                        print(f"🔄  [정보 업데이트] 날짜: {db_date_str} | 세부내용/중요표시/링크를 갱신했습니다.")
                 else:
                     payload = {
                         "date": db_date_str,
@@ -84,7 +89,7 @@ def run_trade_data_crawler():
                         "eventName": event_name,
                         "detail": detail,
                         "relatedStocks": "",
-                        "url": "",
+                        "url": EVENT_URL,
                         "isImportant": True
                     }
                     events_ref.add(payload)
