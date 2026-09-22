@@ -28,8 +28,8 @@ logs_ref = db.collection("crawler_logs") if db else None
 
 TASK_NAME = "[crawl_btc_etf_flow] 비트코인 ETF 순매수 수집"
 
-# 최근 30일치만 유지. 이보다 오래된 날짜는 저장하지 않고, 기존 문서도 삭제.
-RETENTION_DAYS = 30
+# 최근 30거래일(최신 날짜 기준 30건)만 유지. 그 밖의 오래된 문서는 삭제.
+RETENTION_COUNT = 30
 
 URL = "https://farside.co.uk/bitcoin-etf-flow-all-data/"
 
@@ -95,11 +95,10 @@ def fetch_btc_etf_flows():
 
 def run_btc_etf_flow_crawler():
     kst_now = datetime.utcnow() + timedelta(hours=9)
-    cutoff = (kst_now.date() - timedelta(days=RETENTION_DAYS)).strftime("%Y-%m-%d")
 
     print("\n" + "=" * 60)
     print(f"[{kst_now.strftime('%Y-%m-%d %H:%M:%S')} KST] 🚀 비트코인 ETF 순매수 수집 크롤러 가동")
-    print(f"🎯 컬렉션: btc_etf_flows | 최근 {RETENTION_DAYS}일치 유지(기준: {cutoff} 이후)")
+    print(f"🎯 컬렉션: btc_etf_flows | 최근 {RETENTION_COUNT}거래일만 유지")
     print("=" * 60)
 
     added = updated = skipped = 0
@@ -109,17 +108,19 @@ def run_btc_etf_flow_crawler():
         rows = fetch_btc_etf_flows()
         print(f"🔎 표에서 일자행 {len(rows)}건 파싱 완료\n")
 
+        # 최근 RETENTION_COUNT 거래일만 대상 (farside는 오래된→최신 순이라 뒤에서 N개)
+        target = rows[-RETENTION_COUNT:]
+        target_isos = {iso for iso, _, _ in target}
+
         print("🔥 파이어베이스 Firestore 동기화")
         print("-" * 60)
         if not flows_ref:
-            for iso, raw, net in rows:
+            for iso, raw, net in target:
                 print(f"📝 [드라이런] {iso} | Total={raw} → {net}")
         else:
             # 기존 문서 1회 읽어 비교(변경분만 기록) + prune 에 재사용
             existing = {doc.id: doc.to_dict() for doc in flows_ref.stream()}
-            for iso, raw, net in rows:
-                if iso < cutoff:
-                    continue  # 30일보다 오래된 데이터는 저장하지 않음
+            for iso, raw, net in target:
                 prev = existing.get(iso)
                 if prev and prev.get("netFlow") == net and prev.get("rawTotal") == raw:
                     skipped += 1
@@ -139,13 +140,13 @@ def run_btc_etf_flow_crawler():
                     added += 1
                     print(f"✅  [신규] {iso} | {raw} → {net}")
 
-            # 보관기간(30일) 초과 문서 삭제
+            # 최근 RETENTION_COUNT 거래일 밖(더 오래된) 문서 삭제
             for did in existing:
-                if did < cutoff:
+                if did not in target_isos:
                     flows_ref.document(did).delete()
                     pruned += 1
             if pruned:
-                print(f"🧹 보관기간({RETENTION_DAYS}일) 초과 {pruned}건 삭제 (기준: {cutoff} 이전)")
+                print(f"🧹 최근 {RETENTION_COUNT}거래일 밖 {pruned}건 삭제")
         print("-" * 60)
 
         if logs_ref:
