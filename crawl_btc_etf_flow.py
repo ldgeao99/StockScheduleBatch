@@ -28,8 +28,8 @@ logs_ref = db.collection("crawler_logs") if db else None
 
 TASK_NAME = "[crawl_btc_etf_flow] 비트코인 ETF 순매수 수집"
 
-# 최근 30거래일(최신 날짜 기준 30건)만 유지. 그 밖의 오래된 문서는 삭제.
-RETENTION_COUNT = 30
+# 최근 60거래일(최신 날짜 기준 60건)만 유지. 그 밖의 오래된 문서는 삭제.
+RETENTION_COUNT = 60
 
 URL = "https://farside.co.uk/bitcoin-etf-flow-all-data/"
 
