@@ -5,3 +5,4 @@ delete_from_events.py
 
 # JetBrains IDE 설정(로컬 전용)
 .idea/
+logs/earnings_consensus/

@@ -1,0 +1,47 @@
+name: earnings_consensus_telegram (KR trading day)
+
+on:
+  schedule:
+    # 월~금 07:00 KST = 일~목 22:00 UTC.
+    # 스크립트가 금요일 또는 직전 한국증시 영업일에만 전송.
+    - cron: '0 22 * * 0-4'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: earnings-consensus-telegram
+  cancel-in-progress: false
+
+jobs:
+  send-earnings-consensus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install requests "exchange-calendars>=4.12,<5"
+      - name: Send operating profit consensus to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            python earnings_consensus_telegram.py
+          else
+            python earnings_consensus_telegram.py --scheduled
+          fi
+      - name: Preserve sent Telegram messages
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: earnings-consensus-${{ github.run_id }}-${{ github.run_attempt }}
+          path: logs/earnings_consensus/
+          if-no-files-found: ignore
+          retention-days: 90

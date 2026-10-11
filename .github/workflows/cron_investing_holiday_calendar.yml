@@ -7,6 +7,13 @@ on:
     - cron: '0 0 1 * *'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
+concurrency:
+  group: market-holiday-calendar
+  cancel-in-progress: false
+
 jobs:
   run-crawler:
     runs-on: ubuntu-latest
@@ -14,6 +21,9 @@ jobs:
     steps:
     - name: Checkout repository code
       uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.repository.default_branch }}
+        fetch-depth: 0
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -34,3 +44,23 @@ jobs:
       run: |
         # 기존에 등록된 파일명인 crawl_investing_holiday_calendar.py를 호출합니다.
         python crawl_investing_holiday_calendar.py
+    - name: Preserve holiday calendar files
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: market-holidays-${{ github.run_id }}-${{ github.run_attempt }}
+        path: data/market_holidays/
+        if-no-files-found: ignore
+        retention-days: 90
+    - name: Commit holiday calendar updates
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add data/market_holidays/
+        if git diff --cached --quiet; then
+          echo "No holiday calendar changes"
+          exit 0
+        fi
+        git commit -m "Update yearly KR and US market holiday calendars"
+        git pull --rebase origin "${{ github.event.repository.default_branch }}"
+        git push origin "HEAD:${{ github.event.repository.default_branch }}"

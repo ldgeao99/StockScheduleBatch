@@ -9,6 +9,7 @@ import sys
 from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 from crawler_schedule import update_my_schedule
+from market_holidays import save_calendars
 
 # 정수 변환 제한 확장
 sys.set_int_max_str_digits(10000)
@@ -196,6 +197,7 @@ def run_holiday_crawler():
 
             is_already_added = any(
                 item["country"] == matched_country_short and item["reason"] == holiday_reason
+                and item["market"] == market_name
                 for item in daily_groups[last_valid_date_str]
             )
 
@@ -208,6 +210,9 @@ def run_holiday_crawler():
                 print(f"     ➡️ 📥 {last_valid_date_str} 캘린더 그룹에 '{matched_country_short}' 정보 임시 적재 완료.")
             else:
                 print(f"     ➡️ ⚠️ 중복 데이터 감지되어 스킵합니다.")
+
+        for path in save_calendars(daily_groups):
+            print(f"📁 연도/시장별 휴장 파일 저장: {path}")
 
         print("-" * 60)
 
@@ -320,6 +325,7 @@ def run_holiday_crawler():
             "skipped_count": skip_count,
             "message": f"디버깅 모드 실패 에러 로그: {error_msg}"
         })
+        raise
 
 
 if __name__ == "__main__":
