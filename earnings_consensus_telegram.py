@@ -1,4 +1,4 @@
-"""영업이익 주간 컨센서스 상향률 1% 이상 종목을 텔레그램으로 전송.
+"""영업이익 주간 컨센서스 상향/하향 폭 1% 이상 종목을 텔레그램으로 전송.
 
 금요일 또는 그 이전 마지막 한국증시 영업일 07:00 KST.
 --dry-run은 조회/출력만, --scheduled는 실행일 판정 후 실행한다.
@@ -69,7 +69,9 @@ def load_dotenv():
                 os.environ.setdefault(key.strip(), value.strip())
 
 
-def parse_rows(html):
+def parse_rows(html, direction="up"):
+    if direction not in ("up", "down"):
+        raise ValueError("direction은 up 또는 down이어야 합니다.")
     match = re.search(r"var\s+changeTnd\s*=\s*(\[.*?\]);", html, re.S)
     if not match:
         raise ValueError("changeTnd 데이터가 없습니다. 페이지 구조를 확인하세요.")
@@ -78,7 +80,7 @@ def parse_rows(html):
     data = json.loads(raw)
     if len(data) != 4 or data[1].get("id") != "TB1":
         raise ValueError("영업이익 데이터 구조가 변경되었습니다.")
-    rows = data[1]["dest"][0]
+    rows = data[1]["dest"][0 if direction == "up" else 1]
     result = []
     for row in rows:
         if len(row) != 10:
@@ -88,23 +90,28 @@ def parse_rows(html):
         if not change.is_finite() or not profit.is_finite():
             raise ValueError("유효하지 않은 영업이익 또는 변화율입니다.")
         # 표시 반올림 이전의 원본 값으로 1% 이상 판정.
-        if change >= MIN_CHANGE:
+        if (direction == "up" and change >= MIN_CHANGE) or (
+                direction == "down" and change <= -MIN_CHANGE):
             result.append((row[1].split("|", 1)[1], profit, change))
-    return sorted(result, key=lambda item: item[2], reverse=True)
+    return sorted(result, key=lambda item: item[2], reverse=direction == "up")
 
 
-def build_messages(rows, now=None):
+def build_messages(rows, now=None, direction="up"):
+    if direction not in ("up", "down"):
+        raise ValueError("direction은 up 또는 down이어야 합니다.")
+    label = "상향" if direction == "up" else "하향"
+    threshold = "1%" if direction == "up" else "-1%"
     date = (now or datetime.now(KST)).astimezone(KST).strftime("%Y-%m-%d")
     header = (
-        f"✅ 영업이익 추정치 상향종목 정리({date} 조회)\n\n"
-        "- 1주 전 대비 추정치 1% 이상 상향 종목\n"
+        f"✅ 영업이익 추정치 {label}종목 정리({date} 조회)\n\n"
+        f"- 1주 전 대비 추정치 {threshold} 이상 {label} 종목\n"
         "(기업명/ 예상 영업이익/ 전주대비)"
     )
     lines = []
     for name, profit, change in rows:
         amount = profit.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
         percent = change.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
-        lines.append(f"{name}/ {amount:,.0f}억/ +{percent:.1f}%")
+        lines.append(f"{name}/ {amount:,.0f}억/ {percent:+.1f}%")
     if not lines:
         lines = ["해당 종목이 없습니다."]
     messages = []
@@ -171,17 +178,22 @@ def main():
         raise RuntimeError("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 미설정")
     response = requests.get(URL, timeout=30)
     response.raise_for_status()
-    rows = parse_rows(response.text)
+    up_rows = parse_rows(response.text, "up")
+    down_rows = parse_rows(response.text, "down")
+    now = datetime.now(KST)
+    messages = (build_messages(up_rows, now, "up")
+                + build_messages(down_rows, now, "down"))
     if not args.dry_run:
         HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    for message in build_messages(rows):
+    for message in messages:
         if args.dry_run:
             print(message)
         else:
             message_id = send_message(token, chat_id, message)
             path = save_sent_message(message, message_id)
             print(f"[earnings] 전송 기록 저장: {path}")
-    print(f"[earnings] 1% 이상 상향 {len(rows)}종목, "
+    print(f"[earnings] 1% 이상 상향 {len(up_rows)}종목 / "
+          f"1% 이상 하향 {len(down_rows)}종목, "
           f"{'미리보기 완료' if args.dry_run else '전송 완료'}")
 
 
