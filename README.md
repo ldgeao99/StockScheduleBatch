@@ -28,7 +28,7 @@ holiday_found = has_collected_holiday("US", "2026-12-25")
 - 영업이익은 억원 단위 정수, 변화율은 소수점 한 자리로 반올림합니다.
 - 메시지 날짜는 한국 시간 조회일이며, 자료 발표일을 의미하지 않습니다.
 - 기존 GitHub Secrets `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`를 사용합니다.
-- 수동 실행: Actions의 `earnings_consensus_telegram (KR trading day)` → Run workflow. 날짜/휴장 여부와 관계없이 최신 조회 결과를 즉시 전송하고 기록합니다. 예약 실행만 실행일 판정을 적용합니다.
+- 수동 실행: Actions의 `earnings_consensus_telegram (Fri)` → Run workflow. 날짜/휴장 여부와 관계없이 최신 조회 결과를 즉시 전송하고 기록합니다. 예약 실행만 실행일 판정을 적용합니다.
 - 날짜 판정 없이 수동 전송: `python earnings_consensus_telegram.py`. 예약 실행과 동일하게 확인: `python earnings_consensus_telegram.py --scheduled` (`exchange-calendars>=4.12,<5` 필요).
 - 전송 없는 로컬 확인: `python earnings_consensus_telegram.py --dry-run` (`requests` 필요).
 - 전송 성공한 메시지는 `logs/earnings_consensus/YYYY-MM-DD/시각_message_id.txt`에 UTF-8로 저장합니다. 전송 시각(KST)과 실제 전송 문구를 기록하며, 미리보기나 전송 실패는 기록하지 않습니다.

@@ -1,4 +1,4 @@
-name: earnings_consensus_telegram (KR trading day)
+name: earnings_consensus_telegram (Fri)
 
 on:
   schedule:
