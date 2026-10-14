@@ -123,7 +123,8 @@ def build_messages(rows, now=None, direction="up"):
             current = header + "\n(계속)"
         current += "\n" + line
     messages.append(current + "\n\n출처: " + URL)
-    return messages
+    footer = "\n\n- 매주 금요일 갱신, 휴일일경우 앞당겨 갱신"
+    return [message + footer for message in messages]
 
 
 def send_message(token, chat_id, message):
