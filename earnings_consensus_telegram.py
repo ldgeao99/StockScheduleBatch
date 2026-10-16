@@ -1,6 +1,6 @@
 """영업이익 주간 컨센서스 상향/하향 폭 1% 이상 종목을 텔레그램으로 전송.
 
-금요일 또는 그 이전 마지막 한국증시 영업일 13:00 KST.
+금요일 또는 그 이전 마지막 한국증시 영업일 18:00 KST.
 --dry-run은 조회/출력만, --scheduled는 실행일 판정 후 실행한다.
 """
 import argparse
@@ -170,7 +170,7 @@ def main():
         today = datetime.now(KST).date()
         target = scheduled_run_date(today)
         if today != target:
-            print(f"[earnings] 오늘은 전송일이 아닙니다. 예정일: {target} 13:00 KST")
+            print(f"[earnings] 오늘은 전송일이 아닙니다. 예정일: {target} 18:00 KST")
             return
     load_dotenv()
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
