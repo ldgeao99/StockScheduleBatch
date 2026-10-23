@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import subprocess
 import time
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_HALF_UP
@@ -23,38 +24,41 @@ HISTORY_DIR = Path(__file__).resolve().parent / "logs" / "earnings_consensus"
 
 
 def fetch_consensus_html():
-    """일시적인 조회 실패만 재시도한다. 전송은 재시도하지 않는다."""
+    """진단에서 확인된 curl로 조회하며 일시적 실패만 최대 3회 시도한다."""
     delays = (5, 15)
     for attempt in range(1, 4):
         started = time.monotonic()
-        response = None
-        retryable = False
-        print(f"[earnings] WiseReport 조회 {attempt}/3 시작", flush=True)
+        print(f"[earnings] WiseReport curl 조회 {attempt}/3 시작", flush=True)
         try:
-            response = requests.get(URL, timeout=30)
-            retryable = response.status_code in (500, 502, 503, 504)
-            response.raise_for_status()
-            html = response.text
-        except requests.RequestException as exc:
-            if response is None:
-                retryable = (
-                    isinstance(exc, (requests.ConnectionError, requests.Timeout))
-                    and not isinstance(exc, requests.exceptions.SSLError)
-                )
-            status = response.status_code if response is not None else "응답 없음"
-            print(f"[earnings] WiseReport 조회 {attempt}/3 실패: "
-                  f"HTTP {status}, {type(exc).__name__}, "
-                  f"소요 {time.monotonic() - started:.2f}초", flush=True)
-            if not retryable or attempt == 3:
-                raise
+            result = subprocess.run(
+                ["curl", "--disable", "--silent", "--show-error", "--location",
+                 "--proto", "=https", "--proto-redir", "=https", "--retry", "0",
+                 "--connect-timeout", "10", "--max-time", "30",
+                 "--write-out", "\n%{http_code}", URL],
+                capture_output=True, timeout=35, check=False,
+            )
+        except subprocess.TimeoutExpired:
+            code, status, body = 28, "000", b""
+        except OSError:
+            raise RuntimeError("WiseReport 조회에 필요한 curl을 실행할 수 없습니다.") from None
         else:
-            print(f"[earnings] WiseReport 조회 {attempt}/3 성공: "
-                  f"HTTP {response.status_code}, "
-                  f"소요 {time.monotonic() - started:.2f}초", flush=True)
-            return html
-        finally:
-            if response is not None:
-                response.close()
+            code = result.returncode
+            body, separator, raw_status = result.stdout.rpartition(b"\n")
+            status = raw_status.decode("ascii", errors="replace") if separator else "000"
+        elapsed = time.monotonic() - started
+        if code == 0 and status == "200":
+            print(f"[earnings] WiseReport curl 조회 {attempt}/3 성공: "
+                  f"HTTP {status}, {len(body)} bytes, 소요 {elapsed:.2f}초", flush=True)
+            return body.decode("utf-8-sig")
+        # curl 6/7: DNS/연결 실패, 18: 불완전 응답, 28: timeout,
+        # 52/55/56: 빈 응답/송수신 오류. 인증서 및 접근 거부는 재시도하지 않는다.
+        retryable = code in (6, 7, 18, 28, 52, 55, 56) or (
+            code == 0 and status in ("500", "502", "503", "504")
+        )
+        print(f"[earnings] WiseReport curl 조회 {attempt}/3 실패: "
+              f"exit {code}, HTTP {status}, 소요 {elapsed:.2f}초", flush=True)
+        if not retryable or attempt == 3:
+            raise RuntimeError(f"WiseReport 조회 실패: curl exit {code}, HTTP {status}")
         delay = delays[attempt - 1]
         print(f"[earnings] {delay}초 후 조회 재시도", flush=True)
         time.sleep(delay)

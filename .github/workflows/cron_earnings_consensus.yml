@@ -27,6 +27,8 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install requests "exchange-calendars>=4.12,<5"
+      - name: Verify curl is available
+        run: curl --version
       - name: Send operating profit consensus to Telegram
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
