@@ -25,10 +25,11 @@ holiday_found = has_collected_holiday("US", "2026-12-25")
 - 화~토 00:00 KST (`0 15 * * 1-5` UTC)에 확인하고, 토요일 00:00에 전송합니다. 금요일이 한국증시 휴장일이면 직전 영업일의 다음 날 00:00에 전송합니다. 연속 휴장/주말/연도 경계를 거슬러 판정합니다.
 - 한국 휴장 JSON에 있는 일정과 `exchange-calendars`의 XKRX 거래일 달력을 함께 사용합니다. 파일에 누락된 휴장은 XKRX로 보완하며, 달력 조회 실패 시 전송하지 않고 배치를 실패 처리합니다.
 - WiseReport 주간컨센서스의 영업이익 원본 변화율이 +1% 이상인 상향 종목과 -1% 이하인 하향 종목을 별도 메시지로 전송합니다. 각 목록은 변화 폭이 큰 순서이며, 해당 종목이 없어도 안내 메시지를 전송합니다.
+- WiseReport 조회는 연결 오류·타임아웃·HTTP 500/502/503/504 발생 시 5초, 15초 대기 후 최대 3회 시도합니다. 시도 횟수·소요 시간·HTTP 상태를 로그에 남기며, 인증서 오류와 그 외 HTTP 오류는 즉시 실패합니다. 파싱 및 텔레그램 전송은 재시도하지 않습니다.
 - 영업이익은 억원 단위 정수, 변화율은 소수점 한 자리로 반올림합니다.
 - 메시지 날짜는 한국 시간 조회일이며, 자료 발표일을 의미하지 않습니다.
 - 기존 GitHub Secrets `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`를 사용합니다.
-- 수동 실행: Actions의 `earnings_consensus_telegram (Fri)` → Run workflow. 날짜/휴장 여부와 관계없이 최신 조회 결과를 즉시 전송하고 기록합니다. 예약 실행만 실행일 판정을 적용합니다.
+- 수동 실행: Actions의 `earnings_consensus_telegram (Sat)` → Run workflow. 날짜/휴장 여부와 관계없이 최신 조회 결과를 즉시 전송하고 기록합니다. 예약 실행만 실행일 판정을 적용합니다.
 - 날짜 판정 없이 수동 전송: `python earnings_consensus_telegram.py`. 예약 실행과 동일하게 확인: `python earnings_consensus_telegram.py --scheduled` (`exchange-calendars>=4.12,<5` 필요).
 - 전송 없는 로컬 확인: `python earnings_consensus_telegram.py --dry-run` (`requests` 필요).
 - 전송 성공한 메시지는 `logs/earnings_consensus/YYYY-MM-DD/시각_message_id.txt`에 UTF-8로 저장합니다. 전송 시각(KST)과 실제 전송 문구를 기록하며, 미리보기나 전송 실패는 기록하지 않습니다.

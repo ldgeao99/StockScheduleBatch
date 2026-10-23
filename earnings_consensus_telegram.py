@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -19,6 +20,44 @@ URL = "https://comp.wisereport.co.kr/earnings/e1030001.aspx"
 KST = timezone(timedelta(hours=9))
 MIN_CHANGE = Decimal("1")
 HISTORY_DIR = Path(__file__).resolve().parent / "logs" / "earnings_consensus"
+
+
+def fetch_consensus_html():
+    """일시적인 조회 실패만 재시도한다. 전송은 재시도하지 않는다."""
+    delays = (5, 15)
+    for attempt in range(1, 4):
+        started = time.monotonic()
+        response = None
+        retryable = False
+        print(f"[earnings] WiseReport 조회 {attempt}/3 시작", flush=True)
+        try:
+            response = requests.get(URL, timeout=30)
+            retryable = response.status_code in (500, 502, 503, 504)
+            response.raise_for_status()
+            html = response.text
+        except requests.RequestException as exc:
+            if response is None:
+                retryable = (
+                    isinstance(exc, (requests.ConnectionError, requests.Timeout))
+                    and not isinstance(exc, requests.exceptions.SSLError)
+                )
+            status = response.status_code if response is not None else "응답 없음"
+            print(f"[earnings] WiseReport 조회 {attempt}/3 실패: "
+                  f"HTTP {status}, {type(exc).__name__}, "
+                  f"소요 {time.monotonic() - started:.2f}초", flush=True)
+            if not retryable or attempt == 3:
+                raise
+        else:
+            print(f"[earnings] WiseReport 조회 {attempt}/3 성공: "
+                  f"HTTP {response.status_code}, "
+                  f"소요 {time.monotonic() - started:.2f}초", flush=True)
+            return html
+        finally:
+            if response is not None:
+                response.close()
+        delay = delays[attempt - 1]
+        print(f"[earnings] {delay}초 후 조회 재시도", flush=True)
+        time.sleep(delay)
 
 
 def weekly_run_date(friday, is_session):
@@ -177,10 +216,9 @@ def main():
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if not args.dry_run and (not token or not chat_id):
         raise RuntimeError("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 미설정")
-    response = requests.get(URL, timeout=30)
-    response.raise_for_status()
-    up_rows = parse_rows(response.text, "up")
-    down_rows = parse_rows(response.text, "down")
+    html = fetch_consensus_html()
+    up_rows = parse_rows(html, "up")
+    down_rows = parse_rows(html, "down")
     now = datetime.now(KST)
     messages = (build_messages(up_rows, now, "up")
                 + build_messages(down_rows, now, "down"))
