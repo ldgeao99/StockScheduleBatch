@@ -35,3 +35,10 @@ holiday_found = has_collected_holiday("US", "2026-12-25")
 - 전송 성공한 메시지는 `logs/earnings_consensus/YYYY-MM-DD/시각_message_id.txt`에 UTF-8로 저장합니다. 전송 시각(KST)과 실제 전송 문구를 기록하며, 미리보기나 전송 실패는 기록하지 않습니다.
 - Actions 실행에서는 기록을 `earnings-consensus-실행ID-시도번호` artifact로 업로드해 90일 보관합니다. 실행 상세 화면에서 다운로드할 수 있으며, 일부 메시지 전송 후 실패해도 성공한 메시지 기록은 업로드합니다.
 - GitHub Actions 예약 실행은 지연될 수 있습니다. 워크플로우를 기본 브랜치에 반영해야 예약이 활성화됩니다.
+
+### WiseReport 접속 장애 진단
+
+- Actions의 `Diagnose WiseReport connection (no Telegram)`에서 수동 실행할 수 있습니다. 진단 스크립트 또는 해당 워크플로우를 `main`에 반영할 때도 자동 실행합니다.
+- 동일한 GitHub runner에서 `requests`와 `curl`로 컨센서스 페이지 및 동일 호스트의 루트 페이지를 비교합니다. HTTP 상태, 소요 시간, 응답 크기, 실제 영업이익 데이터 파싱 가능 여부를 Actions 요약에 기록합니다.
+- 진단에는 Telegram Secrets를 주입하지 않으며 메시지를 보내지 않습니다. TLS 검증을 유지하고 응답 본문·쿠키는 로그에 출력하지 않습니다.
+- 워크플로우 성공 표시는 진단 완료를 뜻합니다. 접속 성공 여부는 요약의 HTTP 상태와 파싱 결과로 확인합니다. 두 도구 모두 실패하면 로컬과 비교하거나 사이트 측에 접근 정책을 확인해야 합니다.

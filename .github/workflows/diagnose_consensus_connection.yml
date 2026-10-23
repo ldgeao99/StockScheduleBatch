@@ -1,0 +1,26 @@
+name: Diagnose WiseReport connection (no Telegram)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - diagnose_consensus_connection.py
+      - .github/workflows/diagnose_consensus_connection.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install diagnostic dependency
+        run: python -m pip install requests
+      - name: Compare requests and curl without Telegram
+        run: python diagnose_consensus_connection.py
