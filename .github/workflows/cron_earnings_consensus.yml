@@ -2,9 +2,9 @@ name: earnings_consensus_telegram (Sat)
 
 on:
   schedule:
-    # 화~토 00:00 KST = 월~금 15:00 UTC.
+    # 화~토 07:00 KST = 월~금 22:00 UTC.
     # 스크립트가 금요일 또는 직전 한국증시 영업일의 다음 날에만 전송.
-    - cron: '0 15 * * 1-5'
+    - cron: '0 22 * * 1-5'
   workflow_dispatch:
 
 permissions:

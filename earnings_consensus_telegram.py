@@ -1,6 +1,6 @@
 """영업이익 주간 컨센서스 상향/하향 폭 1% 이상 종목을 텔레그램으로 전송.
 
-금요일 또는 그 이전 마지막 한국증시 영업일의 다음 날 00:00 KST.
+금요일 또는 그 이전 마지막 한국증시 영업일의 다음 날 07:00 KST.
 --dry-run은 조회/출력만, --scheduled는 실행일 판정 후 실행한다.
 """
 import argparse
@@ -128,6 +128,9 @@ def parse_rows(html, direction="up"):
     for row in rows:
         if len(row) != 10:
             raise ValueError("영업이익 행의 열 개수가 변경되었습니다.")
+        # 네 번째 열은 목표주가. 목표주가가 없는 종목은 양방향 모두 제외.
+        if row[3] is None or not row[3].strip():
+            continue
         change = Decimal(row[7].replace(",", ""))
         profit = Decimal(row[5].replace(",", ""))
         if not change.is_finite() or not profit.is_finite():
@@ -213,7 +216,7 @@ def main():
         today = datetime.now(KST).date()
         target = scheduled_run_date(today - timedelta(days=1)) + timedelta(days=1)
         if today != target:
-            print(f"[earnings] 오늘은 전송일이 아닙니다. 예정일: {target} 00:00 KST")
+            print(f"[earnings] 오늘은 전송일이 아닙니다. 예정일: {target} 07:00 KST")
             return
     load_dotenv()
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
