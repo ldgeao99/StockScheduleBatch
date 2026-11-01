@@ -1,6 +1,7 @@
 import unittest
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from pathlib import Path
 from contextlib import redirect_stdout
 from io import StringIO
 from unittest.mock import Mock, patch
@@ -10,6 +11,7 @@ import crawl_ipo_schedule as crawler
 
 from crawl_ipo_schedule import (
     extract_confirmed_price,
+    extract_floating_shares,
     has_confirmed_price,
     parse_offer_price,
 )
@@ -54,15 +56,59 @@ class OfferPriceTests(unittest.TestCase):
         self.assertFalse(has_confirmed_price("공모가 정보 없음"))
 
 
+class FloatingSharesTests(unittest.TestCase):
+    def test_real_page_tables(self):
+        for filename, expected in (
+            ("optonics_float.html", "2,172,890주(22.71%)"),
+            ("est_float.html", "5,243,400주(37.70%)"),
+        ):
+            with self.subTest(filename=filename):
+                html = (Path(__file__).parent / "tests" / "fixtures" / filename).read_text()
+                self.assertEqual(extract_floating_shares(BeautifulSoup(html, "html.parser")), expected)
+
+    def table(self, percent="22.71", shares="2,172,890", summary="합계"):
+        # 유통가능 열 뒤에 다른 숫자가 있어도 헤더로 식별한 열만 사용한다.
+        return BeautifulSoup(f"""
+        <table><tr><th rowspan="2">구분</th><th colspan="2">유통가능 물량</th>
+          <th colspan="2">매각제한물량</th><th rowspan="2">기간</th></tr>
+        <tr><th>지분율(%)</th><th>주식수(주)</th><th>주식수</th><th>지분율</th></tr>
+        <tr><td>{summary}</td><td>{percent}</td><td>{shares}</td>
+          <td>7,393,110</td><td>77.29%</td><td>30</td></tr></table>
+        """, "html.parser")
+
+    def test_reordered_columns_and_optional_percent_symbol(self):
+        for percent in ("22.71", "22.71%"):
+            with self.subTest(percent=percent):
+                self.assertEqual(extract_floating_shares(self.table(percent)), "2,172,890주(22.71%)")
+
+    def test_full_and_zero_float_are_valid(self):
+        self.assertEqual(extract_floating_shares(self.table("100.00%")), "2,172,890주(100.00%)")
+        self.assertEqual(extract_floating_shares(self.table("0", "0")), "0주(0%)")
+
+    def test_invalid_values_and_subtotals_are_rejected(self):
+        for values in ({"percent": "101"}, {"shares": "2,17"}, {"summary": "소계"},
+                       {"percent": "-"}, {"shares": "-"}):
+            with self.subTest(values=values):
+                self.assertEqual(extract_floating_shares(self.table(**values)), "")
+
+    def test_unrelated_financial_totals_are_ignored(self):
+        soup = BeautifulSoup("<table><tr><td>자산총계</td><td>2,172,890</td>"
+                             "<td>22.71%</td></tr></table>", "html.parser")
+        self.assertEqual(extract_floating_shares(soup), "")
+
+
 class ExistingEventTests(unittest.TestCase):
     def run_crawler(self, price="12,400원", status=200, error=None, today=None,
-                    stock_name="이에스티", listing_date="2026/11/04"):
+                    stock_name="이에스티", listing_date="2026/11/04", float_html="",
+                    existing_detail=None):
         document = Mock()
         document.to_dict.return_value = {
             "eventName": f"{stock_name} 상장",
             "detail": "정전척 개발 및 제조\n공모가: 10,000원\n"
                       "유통가능물량: 5,243,400주(37.70%)\n유통가능액수: 약 524억 원 🔵",
         }
+        if existing_detail is not None:
+            document.to_dict.return_value["detail"] = existing_detail
         events = Mock()
         events.where.return_value.where.return_value.get.return_value = [document]
         listing = Mock(status_code=200, text=f"""
@@ -71,7 +117,7 @@ class ExistingEventTests(unittest.TestCase):
         <td>{listing_date}</td><td>-</td><td>-</td></tr></table>
         """)
         detail = Mock(status_code=status, text=f"""
-        <table><tr><td>확정공모가</td><td>{price}</td></tr></table>
+        <table><tr><td>확정공모가</td><td>{price}</td></tr></table>{float_html}
         """)
         session = Mock()
         session.get.side_effect = [listing, error or detail]
@@ -114,6 +160,23 @@ class ExistingEventTests(unittest.TestCase):
         payload = document.reference.update.call_args.args[0]
         self.assertEqual(payload["eventName"], "넥스아이 상장")
         self.assertIn("공모가: 8,000원", payload["detail"])
+
+    def test_optonics_missing_float_is_filled_and_amount_calculated(self):
+        html = (Path(__file__).parent / "tests/fixtures/optonics_float.html").read_text()
+        document = self.run_crawler(
+            stock_name="옵토닉스", listing_date="2026/11/17", price="12,000원", float_html=html,
+            existing_detail="광학 부품 제조\n공모가: 12,000원")
+        document.reference.update.assert_called_once()
+        detail = document.reference.update.call_args.args[0]["detail"]
+        self.assertIn("유통가능물량: 2,172,890주(22.71%)", detail)
+        self.assertIn("유통가능액수: 약 261억 원", detail)
+
+    def test_latest_float_replaces_existing_float(self):
+        html = (Path(__file__).parent / "tests/fixtures/optonics_float.html").read_text()
+        document = self.run_crawler(float_html=html)
+        detail = document.reference.update.call_args.args[0]["detail"]
+        self.assertIn("유통가능물량: 2,172,890주(22.71%)", detail)
+        self.assertNotIn("5,243,400주", detail)
 
     def test_unchanged_price_does_not_write(self):
         document = self.run_crawler(price="10,000원")

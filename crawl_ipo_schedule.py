@@ -75,6 +75,64 @@ def extract_confirmed_price(soup) -> str:
     return ""
 
 
+def expand_table_grid(table):
+    """rowspan/colspan을 펼쳐 헤더와 데이터의 실제 열 위치를 맞춘다."""
+    grid = {}
+    rows = [row for row in table.find_all("tr") if row.find_parent("table") is table]
+    for row_index, row in enumerate(rows):
+        column = 0
+        for cell in row.find_all(["th", "td"], recursive=False):
+            while (row_index, column) in grid:
+                column += 1
+            text = re.sub(r"\s+", "", cell.get_text()) if not cell.find("table") else ""
+            rowspan = int(cell.get("rowspan", 1))
+            colspan = int(cell.get("colspan", 1))
+            for r in range(row_index, min(row_index + rowspan, len(rows))):
+                for c in range(column, column + colspan):
+                    grid[r, c] = text
+            column += colspan
+    width = max((column for _, column in grid), default=-1) + 1
+    return [[grid.get((r, c), "") for c in range(width)] for r in range(len(rows))]
+
+
+def extract_floating_shares(soup) -> str:
+    """유통가능물량 헤더의 하위 열을 따라 합계만 읽는다. % 생략도 허용한다."""
+    tables = []
+    for cell in soup.find_all(["th", "td"]):
+        if cell.find("table"):
+            continue
+        if re.sub(r"\s+", "", cell.get_text()) == "유통가능물량":
+            table = cell.find_parent("table")
+            if table is not None and not any(table is item for item in tables):
+                tables.append(table)
+
+    for table in tables:
+        rows = expand_table_grid(table)
+        for header_index, header in enumerate(rows):
+            columns = [i for i, value in enumerate(header) if value == "유통가능물량"]
+            if not columns:
+                continue
+            for sub_index in range(header_index + 1, min(header_index + 4, len(rows))):
+                subheader = rows[sub_index]
+                share_columns = [c for c in columns if subheader[c] in ("주식수", "주식수(주)")]
+                percent_columns = [c for c in columns if subheader[c] in ("지분율", "지분율(%)")]
+                if len(share_columns) != 1 or len(percent_columns) != 1:
+                    continue
+                share_column, percent_column = share_columns[0], percent_columns[0]
+                for row in reversed(rows[sub_index + 1:]):
+                    if not any(value in ("합계", "총계", "총합계") for value in row[:min(columns)]):
+                        continue
+                    shares, percent = row[share_column], row[percent_column]
+                    if not re.fullmatch(r"(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)", shares):
+                        continue
+                    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?%?", percent):
+                        continue
+                    percent = percent.removesuffix("%")
+                    if 0 <= float(percent) <= 100:
+                        return f"{int(shares.replace(',', '')):,}주({percent}%)"
+    return ""
+
+
 def clean_text(text):
     """인코딩 깨짐 및 유령 공백 문자를 완전히 박멸하는 함수"""
     if not text:
@@ -259,58 +317,10 @@ def run_stock_crawler():
                     detail_soup = BeautifulSoup(detail_res.text, "html.parser")
 
                     # 1. 확정공모가 추적
-                    detail_tables = detail_soup.find_all("table")
                     confirmed_price = extract_confirmed_price(detail_soup) or confirmed_price
 
-                    # 2. 유통가능물량 진짜 표 저격 엔진
-                    for idx, d_table in enumerate(detail_tables):
-                        table_rows = d_table.find_all("tr")
-                        if len(table_rows) < 3:
-                            continue
-
-                        header_chunk_text = "".join([re.sub(r'\s+', '', r.get_text()) for r in table_rows[:4]])
-
-                        if "유통가능물량" in header_chunk_text and "주식수" in header_chunk_text and "지분율" in header_chunk_text:
-                            print(f"  👉 [{idx}번 테이블] 3종 키워드 스캔으로 진짜 유통 표 저격 적중")
-                            table_summary = re.sub(r'\s+', ' ', d_table.get_text()).strip()
-                            print(f"    - [표 본문 스냅샷]: '{table_summary[:120]}...'")
-
-                            for d_row in reversed(table_rows):
-                                d_cells = d_row.find_all(["th", "td"])
-                                if not d_cells:
-                                    continue
-
-                                cells_list = [re.sub(r'\s+', '', cell.get_text()) for cell in d_cells]
-                                row_split_text = "|".join(cells_list)
-
-                                is_summary_row = any(
-                                    item.endswith("합계") or item.endswith("총계") for item in cells_list if item)
-                                has_percentage = any("%" in item for item in cells_list)
-
-                                is_financial_noise = any(
-                                    k in row_split_text for k in ["과목", "자본", "매출", "이익", "손실", "자산총계", "부채총계", "거래등"])
-
-                                if is_summary_row and has_percentage and not is_financial_noise:
-                                    print(f"    - '진짜 유통 합계' 결산 행 안전 분할 포착: '{row_split_text}'")
-
-                                    valid_items = []
-                                    for item in cells_list:
-                                        if re.match(r'^[\d,]+$', item) or re.match(r'^[\d.]+\%$', item):
-                                            valid_items.append(item)
-
-                                    print(f"    - 구분 정제된 유효 스펙 데이터 배열: {valid_items}")
-
-                                    if len(valid_items) >= 2:
-                                        final_percent = valid_items[-1]
-                                        final_shares = valid_items[-2]
-
-                                        if final_percent != "100.00%":
-                                            floating_shares = f"{final_shares}주({final_percent})"
-                                            print(f"    - 🎯 완벽 수집 성공 결과: {floating_shares}")
-                                            break
-
-                            if floating_shares:
-                                break
+                    # 2. 병합된 헤더로 유통가능 주식수·지분율 열을 식별한다.
+                    floating_shares = extract_floating_shares(detail_soup) or floating_shares
 
                     detail_loaded = True
 
