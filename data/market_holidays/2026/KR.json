@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "market": "KR",
+  "country": "한국",
+  "year": 2026,
+  "source": "https://kr.investing.com/holiday-calendar/",
+  "updated_at": "2026-11-01T04:03:27.012776+00:00",
+  "complete_year": false,
+  "holidays": [
+    {
+      "date": "2026-12-25",
+      "reason": "크리스마스",
+      "exchange": "서울 증권 거래소"
+    },
+    {
+      "date": "2026-12-25",
+      "reason": "크리스마스",
+      "exchange": "코스닥"
+    }
+  ]
+}

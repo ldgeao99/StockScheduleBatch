@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "market": "US",
+  "country": "미국",
+  "year": 2026,
+  "source": "https://kr.investing.com/holiday-calendar/",
+  "updated_at": "2026-11-01T04:03:27.013157+00:00",
+  "complete_year": false,
+  "holidays": [
+    {
+      "date": "2026-11-26",
+      "reason": "추수감사절",
+      "exchange": "뉴욕 증권 거래소"
+    },
+    {
+      "date": "2026-11-27",
+      "reason": "추수감사절 - 13:00조기 종료",
+      "exchange": "뉴욕 증권 거래소"
+    },
+    {
+      "date": "2026-12-24",
+      "reason": "크리스마스 - 13:00조기 종료",
+      "exchange": "뉴욕 증권 거래소"
+    },
+    {
+      "date": "2026-12-25",
+      "reason": "크리스마스",
+      "exchange": "뉴욕 증권 거래소"
+    }
+  ]
+}
