@@ -1,6 +1,7 @@
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import os
 import urllib3
 import ssl
@@ -37,8 +38,41 @@ logs_ref = db.collection("crawler_logs") if db else None
 
 
 def has_confirmed_price(detail_text: str) -> bool:
-    """detail 텍스트에 '미정'이 아닌 실제 확정 공모가가 이미 기록되어 있는지 여부"""
-    return "공모가:" in detail_text and "공모가: 미정" not in detail_text
+    """잘못 수집된 1원 등은 재조회하고 정상 확정가만 스킵한다."""
+    for line in detail_text.splitlines():
+        match = re.fullmatch(r"공모가:\s*(.+)", line.strip())
+        if match and parse_offer_price(match.group(1)):
+            return True
+    return False
+
+
+def parse_offer_price(value: str) -> str:
+    """가격 한 개만 허용한다. 범위, 비율, 설명의 숫자를 합치지 않는다."""
+    match = re.fullmatch(r"\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*원?\s*", value)
+    if not match:
+        return ""
+    price = int(match.group(1).replace(",", ""))
+    # 뉴스 제목 끝의 한두 자리 숫자가 가격으로 저장된 기존 오류도 재조회한다.
+    return f"{price:,}원" if price >= 100 else ""
+
+
+def extract_confirmed_price(soup) -> str:
+    """중첩 표의 조상 셀과 다른 항목을 제외하고 확정공모가의 값만 읽는다."""
+    for label in soup.find_all(["th", "td"]):
+        if label.find("table"):
+            continue
+        if re.sub(r"\s+", "", label.get_text()) != "확정공모가":
+            continue
+        row = label.parent
+        if row.name != "tr":
+            continue
+        cells = row.find_all(["th", "td"], recursive=False)
+        index = next(i for i, cell in enumerate(cells) if cell is label)
+        if index + 1 < len(cells) and not cells[index + 1].find("table"):
+            price = parse_offer_price(cells[index + 1].get_text())
+            if price:
+                return price
+    return ""
 
 
 def clean_text(text):
@@ -127,7 +161,8 @@ def run_stock_crawler():
         success_count = 0
         update_count = 0
         skip_count = 0
-        current_year = datetime.now().year
+        today = datetime.now(ZoneInfo("Asia/Seoul")).date()
+        current_year = today.year
 
         for row in rows:
             cols = row.find_all("td")
@@ -159,10 +194,17 @@ def run_stock_crawler():
             except ValueError:
                 continue
 
-            # 중복 검증 단계
-            # 💡 이미 등록된 일정이라도 '확정 공모가'가 아직 없는 경우엔 매일 재크롤링하며
-            #    공모가가 새로 발표되었는지 계속 확인해야 하므로, 무조건 스킵하지 않고
-            #    기존 문서(existing_doc)를 들고 다음 단계(상세 페이지 조회)로 넘어간다.
+            # 과거 상장 종목은 DB와 상세 페이지를 조회하기 전에 제외한다.
+            if date_obj.date() < today:
+                skip_count += 1
+                skipped_list.append({
+                    "date": formatted_date,
+                    "name": stock_name,
+                    "reason": "신규상장일이 오늘(한국 시간)보다 과거"
+                })
+                continue
+
+            # 기존 일정도 매 실행마다 상세 페이지를 조회하여 변경 사항을 반영한다.
             existing_doc = None
             existing_detail = ""
             if events_ref:
@@ -177,20 +219,7 @@ def run_stock_crawler():
                     existing_doc = duplicate_query[0]
                     existing_detail = existing_doc.to_dict().get("detail") or ""
 
-                    if has_confirmed_price(existing_detail):
-                        # 구 이름('종목명')으로 저장돼 있으면 이 기회에 신 이름으로 갱신(마이그레이션)
-                        if existing_doc.to_dict().get("eventName") != event_name:
-                            existing_doc.reference.update({"eventName": event_name})
-                        skip_count += 1
-                        # 💡 스킵된 종목 기록 저장
-                        skipped_list.append({
-                            "date": formatted_date,
-                            "name": stock_name,
-                            "reason": "DB 내 중복 + 확정 공모가 이미 존재 (스킵 처리)"
-                        })
-                        continue
-
-                    print(f"⏳ [공모가 미확정] {stock_name} - 기존 일정에 확정 공모가가 없어 최신 정보 재확인 진행")
+                    print(f"🔄 {stock_name} - 기존 일정의 최신 공모가 재확인")
 
             detail_route = stock_a.get("href")
             if "index.htm" in detail_route:
@@ -213,6 +242,14 @@ def run_stock_crawler():
             confirmed_price = ""
             floating_shares = ""
             floating_amount = ""
+            detail_loaded = False
+            if existing_doc:
+                # 일부 항목이 일시적으로 사라져도 기존에 수집한 값은 보존한다.
+                for line in existing_detail.splitlines():
+                    if line.startswith("공모가:"):
+                        confirmed_price = parse_offer_price(line.split(":", 1)[1])
+                    elif line.startswith("유통가능물량:"):
+                        floating_shares = line.split(":", 1)[1].strip()
 
             try:
                 detail_res = session.get(detail_url, headers=headers, verify=False, timeout=15)
@@ -223,20 +260,7 @@ def run_stock_crawler():
 
                     # 1. 확정공모가 추적
                     detail_tables = detail_soup.find_all("table")
-                    for d_table in detail_tables:
-                        if "확정공모가" in d_table.get_text():
-                            d_rows = d_table.find_all("tr")
-                            for d_row in d_rows:
-                                d_cells = d_row.find_all(["th", "td"])
-                                for i, cell in enumerate(d_cells):
-                                    if "확정공모가" in cell.get_text():
-                                        if i + 1 < len(d_cells):
-                                            raw_price = d_cells[i + 1].get_text().strip()
-                                            if len(raw_price) < 30:
-                                                price_digits = re.sub(r'[^\d]', '', raw_price)
-                                                if price_digits:
-                                                    confirmed_price = f"{int(price_digits):,}원"
-                                        break
+                    confirmed_price = extract_confirmed_price(detail_soup) or confirmed_price
 
                     # 2. 유통가능물량 진짜 표 저격 엔진
                     for idx, d_table in enumerate(detail_tables):
@@ -288,6 +312,8 @@ def run_stock_crawler():
                             if floating_shares:
                                 break
 
+                    detail_loaded = True
+
                     # 3. OpenAI 요약 파트 (신규 종목일 때만 수행 - 기존 종목은 저장된 요약을 재사용)
                     page_text = detail_soup.get_text()
                     if not existing_doc and ("1." in page_text or "사업현황" in page_text):
@@ -302,6 +328,15 @@ def run_stock_crawler():
                             print(f"🤖 OpenAI 한줄 요약 변환: {detail_desc}")
             except Exception as sub_e:
                 print(f"❌ {stock_name} 상세 데이터 가공 중 에러 발생: {str(sub_e)}")
+
+            if existing_doc and not detail_loaded:
+                skip_count += 1
+                skipped_list.append({
+                    "date": formatted_date,
+                    "name": stock_name,
+                    "reason": "상세 조회 실패 - 기존 정보 유지"
+                })
+                continue
 
             # 금액 연산 파트
             if confirmed_price and floating_shares:
@@ -333,20 +368,20 @@ def run_stock_crawler():
 
             if existing_doc:
                 # 💡 기존에 등록된 일정 - detail 내용에 실질적인 변화(공모가 확정 등)가 있을 때만 갱신한다.
-                if detail_desc == existing_detail:
+                if detail_desc == existing_detail and existing_doc.to_dict().get("eventName") == event_name:
                     skip_count += 1
                     skipped_list.append({
                         "date": formatted_date,
                         "name": stock_name,
-                        "reason": "확정 공모가 아직 미발표 (다음 회차에 재확인)"
+                        "reason": "최신 정보 확인 완료 - 변경 없음"
                     })
-                    print(f"⏭️ 확정 공모가 아직 미발표 - 다음 크롤링에서 재확인 예정")
+                    print(f"⏭️ 최신 정보 확인 완료 - 변경 없음")
                     print(f"🔍 [디버깅 대상 종목 종료] -------------------------------\n")
                     continue
 
                 if events_ref:
                     existing_doc.reference.update({"detail": detail_desc, "eventName": event_name})
-                    print(f"🔄 확정 공모가 신규 발표 감지 - 기존 일정 detail 갱신 완료")
+                    print(f"🔄 공모가 등 변경 감지 - 기존 일정 갱신 완료")
                 else:
                     print(f"📝 [드라이런 모드 로그 출력] 공모가 갱신 대상 날짜: {formatted_date} | 종목: {stock_name}")
                 update_count += 1
