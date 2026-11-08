@@ -169,7 +169,7 @@ def build_messages(rows, now=None, direction="up"):
             current = header + "\n(계속)"
         current += "\n" + line
     messages.append(current + "\n\n출처: " + URL)
-    footer = "\n\n- 매주 금요일 갱신, 휴일일경우 앞당겨 갱신"
+    footer = "\n\n- 매주 토요일 오전 7시 전송, 금요일 휴장 시 직전 영업일의 다음 날 오전 7시로 앞당겨 전송"
     return [message + footer for message in messages]
 
 
