@@ -112,10 +112,34 @@ class DartAllocationTests(unittest.TestCase):
         self.assertEqual(crawler.find_issuance_report_rcp_no('<option title="투자설명서">'), "")
 
 
+class BusinessSectionTests(unittest.TestCase):
+    def test_section_starts_at_business_heading_not_dates(self):
+        text = "수요예측일 2026.11.02 ~ 2026.11.06 " + "가" * 3000 + " 1.사업현황 -당사는 암세포 스크리닝"
+        chunk = crawler.extract_business_section(text)
+        self.assertTrue(chunk.startswith("1.사업현황 -당사는"))
+
+    def test_missing_section(self):
+        self.assertEqual(crawler.extract_business_section("공모청약일 2026.11.12"), "")
+
+    def test_placeholder_summary_is_retried_for_existing_event(self):
+        with patch.object(crawler, "summarize_business_with_ai", return_value="항암제 스크리닝 플랫폼") as ai:
+            document = ExistingEventTests().run_crawler(
+                float_html="<p>1. 사업현황 -당사는 항암제 스크리닝</p>",
+                existing_detail="참조 가능한 정보 없음\n공모가: 10,000원")
+        ai.assert_called_once()
+        detail = document.reference.update.call_args.args[0]["detail"]
+        self.assertTrue(detail.startswith("항암제 스크리닝 플랫폼\n"))
+
+    def test_real_summary_is_not_regenerated(self):
+        with patch.object(crawler, "summarize_business_with_ai") as ai:
+            ExistingEventTests().run_crawler(float_html="<p>1. 사업현황 -당사는</p>")
+        ai.assert_not_called()
+
+
 class ExistingEventTests(unittest.TestCase):
     def run_crawler(self, price="12,400원", status=200, error=None, today=None,
                     stock_name="이에스티", listing_date="2026/11/04", float_html="",
-                    existing_detail=None, allocation=None):
+                    existing_detail=None, allocation=None, dart_error=None):
         document = Mock()
         document.to_dict.return_value = {
             "eventName": f"{stock_name} 상장",
@@ -134,7 +158,7 @@ class ExistingEventTests(unittest.TestCase):
         """)
         detail = Mock(status_code=status, text=f"""
         <table><tr><td>확정공모가</td><td>{price}</td></tr></table>{float_html}
-        {DART_LINK if allocation else ""}
+        {DART_LINK if allocation or dart_error else ""}
         """)
         session = Mock()
         session.get.side_effect = [listing, error or detail]
@@ -142,7 +166,8 @@ class ExistingEventTests(unittest.TestCase):
                 patch.object(crawler, "logs_ref", None), \
                 patch.object(crawler, "datetime", wraps=datetime) as clock, \
                 patch.object(crawler.requests, "Session", return_value=session), \
-                patch.object(crawler, "fetch_dart_allocation", return_value=allocation) as dart, \
+                patch.object(crawler, "fetch_dart_allocation", return_value=allocation,
+                             side_effect=dart_error) as dart, \
                 redirect_stdout(StringIO()):
             clock.now.return_value = today or datetime(2026, 11, 2, tzinfo=ZoneInfo("Asia/Seoul"))
             crawler.run_stock_crawler()
@@ -209,6 +234,22 @@ class ExistingEventTests(unittest.TestCase):
         self.assertIn("일반투자자 배정: 1,000,000주", detail)
         self.assertIn("유통가능액수: 약 139억 원", detail)
         self.assertNotIn("5,243,400주", detail)
+
+    def test_dart_connection_failure_is_not_reported_as_pending(self):
+        with patch.object(crawler.requests, "get", side_effect=crawler.requests.ConnectTimeout("t")) as get, \
+                patch.dict(crawler.DART_STATE, {"down": False}), redirect_stdout(StringIO()):
+            with self.assertRaises(crawler.DartUnavailable):
+                crawler.fetch_dart_allocation(["20261110000253", "20261015000329"])
+            with self.assertRaises(crawler.DartUnavailable):
+                crawler.fetch_dart_allocation(["20261029000504"])
+        self.assertEqual(get.call_count, 1)  # 첫 실패 후 같은 실행에서는 재시도하지 않음
+
+    def test_dart_failure_label_in_detail(self):
+        document = self.run_crawler(existing_detail="정전척 개발 및 제조\n공모가: 10,000원",
+                                    dart_error=crawler.DartUnavailable("down"))
+        detail = document.reference.update.call_args.args[0]["detail"]
+        self.assertIn("유통가능물량: DART 조회 실패 - 다음 실행 때 재조회", detail)
+        self.assertNotIn("공시 대기중", detail)
 
     def test_unchanged_price_does_not_write(self):
         document = self.run_crawler(price="10,000원")

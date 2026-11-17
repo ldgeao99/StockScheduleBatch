@@ -195,8 +195,22 @@ def extract_dart_rcp_nos(detail_html: str):
     return found
 
 
+class DartUnavailable(Exception):
+    """DART 접속 자체가 안 되는 상태(미공시와 구분)."""
+
+
+# 한 번 접속이 막히면 같은 실행 동안 재시도하지 않는다. (종목당 45초씩 낭비 방지)
+DART_STATE = {"down": False}
+
+
 def dart_get(url: str) -> str:
-    res = requests.get(url, headers=DART_HEADERS, timeout=15)
+    if DART_STATE["down"]:
+        raise DartUnavailable("이번 실행에서 DART 접속 불가로 판정됨")
+    try:
+        res = requests.get(url, headers=DART_HEADERS, timeout=(5, 15))
+    except (requests.ConnectionError, requests.Timeout) as e:
+        DART_STATE["down"] = True
+        raise DartUnavailable(f"DART 접속 실패: {e}") from e
     res.raise_for_status()
     res.encoding = "utf-8"
     return res.text
@@ -219,12 +233,15 @@ def parse_dart_toc(main_html: str):
 
 
 def fetch_dart_allocation(rcp_nos):
-    """증권발행실적보고서에서 (일반투자자 배정, 기관 미확약) 수량을 가져온다. 실패 시 None."""
+    """증권발행실적보고서에서 (일반투자자 배정, 기관 미확약) 수량을 가져온다.
+    미공시면 None, 접속 불가면 DartUnavailable을 던진다."""
     report_rcp_no = ""
     for rcp_no in rcp_nos[:3]:
         try:
             report_rcp_no = find_issuance_report_rcp_no(
                 dart_get(f"{DART_BASE_URL}/dsaf001/main.do?rcpNo={rcp_no}"))
+        except DartUnavailable:
+            raise
         except Exception as e:
             print(f"⚠️ DART 관련문서 조회 실패({rcp_no}): {e}")
         if report_rcp_no:
@@ -256,6 +273,16 @@ def clean_text(text):
         return ""
     cleaned = re.sub(r'[\s\xa0\xad\t\n\r]+', ' ', text)
     return cleaned.strip()
+
+
+SUMMARY_PLACEHOLDERS = ("참조 가능한 정보 없음", "신규상장 예정 종목", "")
+
+
+def extract_business_section(page_text: str) -> str:
+    """'1. 사업현황' 본문부터 잘라낸다. (청약일 '2026.11.' 같은 날짜의 '1.'에 걸리지 않게)"""
+    text = clean_text(page_text)
+    match = re.search(r"1\s*\.\s*사업\s*현황", text) or re.search(r"사업\s*현황", text)
+    return text[match.start():match.start() + 3500] if match else ""
 
 
 def summarize_business_with_ai(stock_name, business_raw_text):
@@ -420,6 +447,7 @@ def run_stock_crawler():
             unlocked_shares = None
             floating_amount = ""
             detail_loaded = False
+            dart_failed = False
             if existing_doc:
                 # 일부 항목이 일시적으로 사라져도 기존에 수집한 값은 보존한다.
                 for line in existing_detail.splitlines():
@@ -453,22 +481,17 @@ def run_stock_crawler():
                             allocation = fetch_dart_allocation(rcp_nos)
                         except Exception as dart_e:
                             allocation = None
+                            dart_failed = True
                             print(f"⚠️ {stock_name} DART 배정현황 조회 실패: {dart_e}")
                         if allocation:
                             retail_shares, unlocked_shares = allocation
 
                     detail_loaded = True
 
-                    # 4. OpenAI 요약 파트 (신규 종목일 때만 수행 - 기존 종목은 저장된 요약을 재사용)
-                    page_text = detail_soup.get_text()
-                    if not existing_doc and ("1." in page_text or "사업현황" in page_text):
-                        cleaned_page_text = clean_text(page_text)
-                        start_idx = cleaned_page_text.find("1.")
-                        if start_idx == -1:
-                            start_idx = cleaned_page_text.find("사업현황")
-
-                        if start_idx != -1:
-                            target_chunk = cleaned_page_text[max(0, start_idx - 20):start_idx + 3500]
+                    # 4. OpenAI 요약 파트 (신규 종목, 또는 기존 요약이 안내 문구뿐인 종목만 수행)
+                    if not existing_doc or detail_desc in SUMMARY_PLACEHOLDERS:
+                        target_chunk = extract_business_section(detail_soup.get_text())
+                        if target_chunk:
                             detail_desc = summarize_business_with_ai(stock_name, target_chunk)
                             print(f"🤖 OpenAI 한줄 요약 변환: {detail_desc}")
             except Exception as sub_e:
@@ -519,14 +542,15 @@ def run_stock_crawler():
                                f"\n일반투자자 배정: {retail_shares:,}주"
                                f"\n기관투자자 배정 미확약: {unlocked_shares:,}주")
             else:
-                detail_desc = f"{detail_desc}\n유통가능물량: 증권발행실적보고서 공시 대기중"
+                pending = "DART 조회 실패 - 다음 실행 때 재조회" if dart_failed else "증권발행실적보고서 공시 대기중"
+                detail_desc = f"{detail_desc}\n유통가능물량: {pending}"
 
             if floating_amount:
                 detail_desc = f"{detail_desc}\n유통가능액수: {floating_amount}"
             elif not confirmed_price:
                 detail_desc = f"{detail_desc}\n유통가능액수: 공모가 확정 대기중"
             elif floating_shares is None:
-                detail_desc = f"{detail_desc}\n유통가능액수: 증권발행실적보고서 공시 대기중"
+                detail_desc = f"{detail_desc}\n유통가능액수: {pending}"
 
             if existing_doc:
                 # 💡 기존에 등록된 일정 - detail 내용에 실질적인 변화(공모가 확정 등)가 있을 때만 갱신한다.
