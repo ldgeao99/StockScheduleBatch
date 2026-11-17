@@ -1,30 +1,32 @@
-"""GitHub Actions 러너에서 DART 계열 호스트 접속 가능 여부 진단. DB 접근 없음."""
-import socket
+"""GitHub Actions 러너에서 DART 접속 조건별 진단. DB 접근 없음."""
 import time
 
 import requests
 
-TARGETS = [
-    "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20261110000258",
-    "https://opendart.fss.or.kr/api/list.json?crtfc_key=0&page_count=1",
-    "https://m.dart.fss.or.kr/",
+CHROME_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+             "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+URLS = [
+    "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20261110000253",
+    "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20261117000038",
+    "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20261029000504",
 ]
 
-try:
-    print("러너 공인 IP 국가:", requests.get("https://ipinfo.io/country", timeout=10).text.strip())
-except requests.RequestException as exc:
-    print("러너 IP 확인 실패:", type(exc).__name__)
 
-for url in TARGETS:
-    host = url.split("/")[2]
-    try:
-        print(f"[{host}] DNS: {socket.gethostbyname(host)}")
-    except OSError as exc:
-        print(f"[{host}] DNS 실패: {exc}")
-    started = time.monotonic()
-    try:
-        res = requests.get(url, timeout=(10, 20))
-        print(f"[{host}] HTTP {res.status_code}, {len(res.content)} bytes, "
-              f"{time.monotonic() - started:.1f}s, 본문: {res.text[:120]!r}")
-    except requests.RequestException as exc:
-        print(f"[{host}] 실패 {type(exc).__name__} ({time.monotonic() - started:.1f}s)")
+def probe(label, headers, rounds=2, gap=0.0):
+    for round_no in range(rounds):
+        for url in URLS:
+            started = time.monotonic()
+            try:
+                res = requests.get(url, headers=headers, timeout=(5, 15))
+                result = f"HTTP {res.status_code} {len(res.content)}B"
+            except requests.RequestException as exc:
+                result = f"실패 {type(exc).__name__}: {str(exc)[-90:]}"
+            print(f"[{label}] r{round_no} {url[-14:]} -> {result} ({time.monotonic() - started:.1f}s)")
+            time.sleep(gap)
+
+
+probe("기본UA", {})
+probe("크롬UA", {"User-Agent": CHROME_UA})
+probe("크롬UA+브라우저헤더", {"User-Agent": CHROME_UA, "Accept": "text/html,application/xhtml+xml",
+                          "Accept-Language": "ko-KR,ko;q=0.9", "Referer": "https://dart.fss.or.kr/"})
+probe("기본UA-1초간격", {}, gap=1.0)
