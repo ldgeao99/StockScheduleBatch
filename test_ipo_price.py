@@ -11,7 +11,10 @@ import crawl_ipo_schedule as crawler
 
 from crawl_ipo_schedule import (
     extract_confirmed_price,
-    extract_floating_shares,
+    extract_dart_rcp_nos,
+    extract_institution_unlocked,
+    extract_post_ipo_total_shares,
+    extract_retail_allocation,
     has_confirmed_price,
     parse_offer_price,
 )
@@ -56,56 +59,69 @@ class OfferPriceTests(unittest.TestCase):
         self.assertFalse(has_confirmed_price("공모가 정보 없음"))
 
 
-class FloatingSharesTests(unittest.TestCase):
-    def test_real_page_tables(self):
-        for filename, expected in (
-            ("optonics_float.html", "2,172,890주(22.71%)"),
-            ("est_float.html", "5,243,400주(37.70%)"),
-        ):
-            with self.subTest(filename=filename):
-                html = (Path(__file__).parent / "tests" / "fixtures" / filename).read_text()
-                self.assertEqual(extract_floating_shares(BeautifulSoup(html, "html.parser")), expected)
+FIXTURES = Path(__file__).parent / "tests" / "fixtures"
+DART_LINK = "<a href=\"javascript:viewDetail2('20261029000504')\">증권신고서</a>"
 
-    def table(self, percent="22.71", shares="2,172,890", summary="합계"):
-        # 유통가능 열 뒤에 다른 숫자가 있어도 헤더로 식별한 열만 사용한다.
-        return BeautifulSoup(f"""
-        <table><tr><th rowspan="2">구분</th><th colspan="2">유통가능 물량</th>
-          <th colspan="2">매각제한물량</th><th rowspan="2">기간</th></tr>
-        <tr><th>지분율(%)</th><th>주식수(주)</th><th>주식수</th><th>지분율</th></tr>
-        <tr><td>{summary}</td><td>{percent}</td><td>{shares}</td>
-          <td>7,393,110</td><td>77.29%</td><td>30</td></tr></table>
+
+class PostIpoSharesTests(unittest.TestCase):
+    def test_real_page_table(self):
+        html = (FIXTURES / "optonics_float.html").read_text()
+        self.assertEqual(extract_post_ipo_total_shares(BeautifulSoup(html, "html.parser")), "9,566,000주")
+
+    def test_header_variants_skip_locked_and_float_columns(self):
+        # '공모후' 아래에 보유/매각제한/유통가능이 함께 있는 3단 헤더와 '공모후합계' 라벨
+        soup = BeautifulSoup("""
+        <table><tr><td rowspan="3">구분</td><td colspan="2" rowspan="2">공모전</td>
+          <td colspan="6">공모후</td></tr>
+        <tr><td colspan="2">보유주식</td><td colspan="2">매각제한물량</td><td colspan="2">유통가능물량</td></tr>
+        <tr><td>주식수</td><td>지분율</td><td>주식수</td><td>지분율</td><td>주식수</td><td>지분율</td>
+          <td>주식수</td><td>지분율</td></tr>
+        <tr><td>소계</td><td>1</td><td>1%</td><td>132,000</td><td>0.74%</td><td>1</td><td>1%</td><td>1</td><td>1%</td></tr>
+        <tr><td>공모후합계</td><td>13,197,964</td><td>100%</td><td>17,729,964</td><td>100%</td>
+          <td>12,264,583</td><td>69.17%</td><td>5,465,381</td><td>30.83%</td></tr></table>
         """, "html.parser")
+        self.assertEqual(extract_post_ipo_total_shares(soup), "17,729,964주")
 
-    def test_reordered_columns_and_optional_percent_symbol(self):
-        for percent in ("22.71", "22.71%"):
-            with self.subTest(percent=percent):
-                self.assertEqual(extract_floating_shares(self.table(percent)), "2,172,890주(22.71%)")
+    def test_missing_table(self):
+        soup = BeautifulSoup("<table><tr><td>자산총계</td><td>1,000</td></tr></table>", "html.parser")
+        self.assertEqual(extract_post_ipo_total_shares(soup), "")
 
-    def test_full_and_zero_float_are_valid(self):
-        self.assertEqual(extract_floating_shares(self.table("100.00%")), "2,172,890주(100.00%)")
-        self.assertEqual(extract_floating_shares(self.table("0", "0")), "0주(0%)")
 
-    def test_invalid_values_and_subtotals_are_rejected(self):
-        for values in ({"percent": "101"}, {"shares": "2,17"}, {"summary": "소계"},
-                       {"percent": "-"}, {"shares": "-"}):
-            with self.subTest(values=values):
-                self.assertEqual(extract_floating_shares(self.table(**values)), "")
+class DartAllocationTests(unittest.TestCase):
+    def test_real_issuance_report_tables(self):
+        soup = BeautifulSoup((FIXTURES / "optonics_dart_allocation.html").read_text(), "html.parser")
+        self.assertEqual(extract_retail_allocation(soup), 550_000)
+        self.assertEqual(extract_institution_unlocked(soup), 333_705)
 
-    def test_unrelated_financial_totals_are_ignored(self):
-        soup = BeautifulSoup("<table><tr><td>자산총계</td><td>2,172,890</td>"
-                             "<td>22.71%</td></tr></table>", "html.parser")
-        self.assertEqual(extract_floating_shares(soup), "")
+    def test_dash_means_zero_and_missing_tables_return_none(self):
+        soup = BeautifulSoup("""
+        <p>의무보유확약기간별 배정현황</p><table><tr><td>(단위 : 주, %)</td></tr></table>
+        <table><tr><td>확약기간</td><td>수량</td><td>비중</td></tr>
+        <tr><td>미확약</td><td>-</td><td>-</td></tr></table>
+        """, "html.parser")
+        self.assertEqual(extract_institution_unlocked(soup), 0)
+        self.assertIsNone(extract_retail_allocation(soup))
+
+    def test_rcp_numbers_and_report_lookup(self):
+        html = ("<a href=\"javascript:viewDetail2('20261029000504')\">a</a>"
+                "<a href=\"javascript:viewDetail2('20261021000210')\">b</a>"
+                "<a href=\"javascript:viewDetail2('20261029000504')\">c</a>")
+        self.assertEqual(extract_dart_rcp_nos(html), ["20261029000504", "20261021000210"])
+        main = '<option value="rcpNo=20261110000258" title="증권발행실적보고서">'
+        self.assertEqual(crawler.find_issuance_report_rcp_no(main), "20261110000258")
+        self.assertEqual(crawler.find_issuance_report_rcp_no('<option title="투자설명서">'), "")
 
 
 class ExistingEventTests(unittest.TestCase):
     def run_crawler(self, price="12,400원", status=200, error=None, today=None,
                     stock_name="이에스티", listing_date="2026/11/04", float_html="",
-                    existing_detail=None):
+                    existing_detail=None, allocation=None):
         document = Mock()
         document.to_dict.return_value = {
             "eventName": f"{stock_name} 상장",
-            "detail": "정전척 개발 및 제조\n공모가: 10,000원\n"
-                      "유통가능물량: 5,243,400주(37.70%)\n유통가능액수: 약 524억 원 🔵",
+            "detail": "정전척 개발 및 제조\n공모가: 10,000원\n공모후 주식수 합계: 13,908,000주\n"
+                      "유통가능물량: 5,243,400주(37.70%)\n일반투자자 배정: 3,000,000주\n"
+                      "기관투자자 배정 미확약: 2,243,400주\n유통가능액수: 약 524억 원 🔵",
         }
         if existing_detail is not None:
             document.to_dict.return_value["detail"] = existing_detail
@@ -118,6 +134,7 @@ class ExistingEventTests(unittest.TestCase):
         """)
         detail = Mock(status_code=status, text=f"""
         <table><tr><td>확정공모가</td><td>{price}</td></tr></table>{float_html}
+        {DART_LINK if allocation else ""}
         """)
         session = Mock()
         session.get.side_effect = [listing, error or detail]
@@ -125,6 +142,7 @@ class ExistingEventTests(unittest.TestCase):
                 patch.object(crawler, "logs_ref", None), \
                 patch.object(crawler, "datetime", wraps=datetime) as clock, \
                 patch.object(crawler.requests, "Session", return_value=session), \
+                patch.object(crawler, "fetch_dart_allocation", return_value=allocation) as dart, \
                 redirect_stdout(StringIO()):
             clock.now.return_value = today or datetime(2026, 11, 2, tzinfo=ZoneInfo("Asia/Seoul"))
             crawler.run_stock_crawler()
@@ -136,6 +154,8 @@ class ExistingEventTests(unittest.TestCase):
             self.assertEqual(session.get.call_count, 2)
         clock.now.assert_any_call(ZoneInfo("Asia/Seoul"))
         events.add.assert_not_called()
+        if allocation:
+            dart.assert_called_once_with(["20261029000504"])
         return document
 
     def test_confirmed_price_is_refreshed_and_amount_recalculated(self):
@@ -161,21 +181,33 @@ class ExistingEventTests(unittest.TestCase):
         self.assertEqual(payload["eventName"], "넥스아이 상장")
         self.assertIn("공모가: 8,000원", payload["detail"])
 
-    def test_optonics_missing_float_is_filled_and_amount_calculated(self):
-        html = (Path(__file__).parent / "tests/fixtures/optonics_float.html").read_text()
+    def test_optonics_detail_uses_dart_allocation(self):
+        html = (FIXTURES / "optonics_float.html").read_text()
         document = self.run_crawler(
             stock_name="옵토닉스", listing_date="2026/11/17", price="12,000원", float_html=html,
-            existing_detail="광학 부품 제조\n공모가: 12,000원")
-        document.reference.update.assert_called_once()
+            existing_detail="광학식 자이로스코프 제조 및 개발\n공모가: 12,000원",
+            allocation=(550_000, 333_705))
         detail = document.reference.update.call_args.args[0]["detail"]
-        self.assertIn("유통가능물량: 2,172,890주(22.71%)", detail)
-        self.assertIn("유통가능액수: 약 261억 원", detail)
+        self.assertEqual(detail, "광학식 자이로스코프 제조 및 개발\n"
+                                 "공모가: 12,000원\n"
+                                 "공모후 주식수 합계: 9,566,000주\n"
+                                 "유통가능물량: 883,705주(9.24%)\n"
+                                 "일반투자자 배정: 550,000주\n"
+                                 "기관투자자 배정 미확약: 333,705주\n"
+                                 "유통가능액수: 약 106억 원 🔵")
 
-    def test_latest_float_replaces_existing_float(self):
-        html = (Path(__file__).parent / "tests/fixtures/optonics_float.html").read_text()
-        document = self.run_crawler(float_html=html)
+    def test_missing_dart_report_is_marked_pending(self):
+        document = self.run_crawler(existing_detail="정전척 개발 및 제조\n공모가: 10,000원")
         detail = document.reference.update.call_args.args[0]["detail"]
-        self.assertIn("유통가능물량: 2,172,890주(22.71%)", detail)
+        self.assertIn("유통가능물량: 증권발행실적보고서 공시 대기중", detail)
+        self.assertIn("유통가능액수: 증권발행실적보고서 공시 대기중", detail)
+
+    def test_new_dart_allocation_replaces_existing_values(self):
+        document = self.run_crawler(price="10,000원", allocation=(1_000_000, 390_800))
+        detail = document.reference.update.call_args.args[0]["detail"]
+        self.assertIn("유통가능물량: 1,390,800주(10.00%)", detail)
+        self.assertIn("일반투자자 배정: 1,000,000주", detail)
+        self.assertIn("유통가능액수: 약 139억 원", detail)
         self.assertNotIn("5,243,400주", detail)
 
     def test_unchanged_price_does_not_write(self):

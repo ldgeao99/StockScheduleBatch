@@ -95,42 +95,159 @@ def expand_table_grid(table):
     return [[grid.get((r, c), "") for c in range(width)] for r in range(len(rows))]
 
 
-def extract_floating_shares(soup) -> str:
-    """유통가능물량 헤더의 하위 열을 따라 합계만 읽는다. % 생략도 허용한다."""
-    tables = []
-    for cell in soup.find_all(["th", "td"]):
-        if cell.find("table"):
-            continue
-        if re.sub(r"\s+", "", cell.get_text()) == "유통가능물량":
-            table = cell.find_parent("table")
-            if table is not None and not any(table is item for item in tables):
-                tables.append(table)
+def parse_share_count(value: str):
+    """'1,234' -> 1234, '-'은 0으로 본다. 숫자 형식이 아니면 None."""
+    value = re.sub(r"\s+", "", value or "").removesuffix("주")
+    if value in ("-", "0"):
+        return 0
+    if re.fullmatch(r"[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+", value):
+        return int(value.replace(",", ""))
+    return None
 
-    for table in tables:
+
+def extract_post_ipo_total_shares(soup) -> str:
+    """주주구성 표에서 '공모 후' 보유 주식수 열(매각제한·유통가능·지분율 제외)의 합계 행 값을 읽는다."""
+    seen = []
+    for cell in soup.find_all(["th", "td"]):
+        label = re.sub(r"\s+", "", cell.get_text())
+        if cell.find("table") or not label.startswith("공모후") or len(label) > 20:
+            continue
+        table = cell.find_parent("table")
+        if table is None or any(table is item for item in seen):
+            continue
+        seen.append(table)
         rows = expand_table_grid(table)
-        for header_index, header in enumerate(rows):
-            columns = [i for i, value in enumerate(header) if value == "유통가능물량"]
-            if not columns:
+        # 숫자가 처음 나오는 행 이전까지만 헤더로 본다. ('공모후합계' 같은 데이터 라벨 오인 방지)
+        header_rows = []
+        for row in rows[:5]:
+            if any(re.fullmatch(r"[0-9][0-9,]*", value) for value in row):
+                break
+            header_rows.append(row)
+        columns = []
+        for c in range(len(rows[0]) if rows else 0):
+            labels = [row[c] for row in header_rows]
+            if not any(label.startswith("공모후") for label in labels):
                 continue
-            for sub_index in range(header_index + 1, min(header_index + 4, len(rows))):
-                subheader = rows[sub_index]
-                share_columns = [c for c in columns if subheader[c] in ("주식수", "주식수(주)")]
-                percent_columns = [c for c in columns if subheader[c] in ("지분율", "지분율(%)")]
-                if len(share_columns) != 1 or len(percent_columns) != 1:
-                    continue
-                share_column, percent_column = share_columns[0], percent_columns[0]
-                for row in reversed(rows[sub_index + 1:]):
-                    if not any(value in ("합계", "총계", "총합계") for value in row[:min(columns)]):
-                        continue
-                    shares, percent = row[share_column], row[percent_column]
-                    if not re.fullmatch(r"(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)", shares):
-                        continue
-                    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?%?", percent):
-                        continue
-                    percent = percent.removesuffix("%")
-                    if 0 <= float(percent) <= 100:
-                        return f"{int(shares.replace(',', '')):,}주({percent}%)"
+            if any(k in label for label in labels for k in ("매각제한", "유통가능", "지분율", "%")):
+                continue
+            columns.append(c)
+        if not columns:
+            continue
+        column = columns[0]
+        for row in reversed(rows):
+            if re.fullmatch(r"(공모후)?(합계|총계|총합계)", row[0]):
+                shares = parse_share_count(row[column])
+                if shares:
+                    return f"{shares:,}주"
     return ""
+
+
+def tables_after(soup, label: str, limit: int = 3):
+    """공백을 무시하고 라벨 텍스트 뒤의 표를 순서대로 돌려준다. (단위 표 등 앞쪽 보조 표 대비)"""
+    pattern = re.compile(r"\s*".join(map(re.escape, label.replace(" ", ""))))
+    for text in soup.find_all(string=pattern):
+        table = text
+        for _ in range(limit):
+            table = table.find_next("table")
+            if table is None:
+                break
+            yield expand_table_grid(table)
+
+
+def extract_retail_allocation(soup):
+    """일반투자자 세부 배정현황 표에서 총배정수량 열의 맨 아래(합계) 값을 읽는다."""
+    for rows in tables_after(soup, "일반투자자 세부 배정현황"):
+        for header_index, header in enumerate(rows[:4]):
+            columns = [i for i, value in enumerate(header) if value.startswith("총배정수량")]
+            if len(columns) != 1:
+                continue
+            column = columns[0]
+            for row in reversed(rows[header_index + 1:]):
+                if row[column].startswith("총배정수량"):
+                    break
+                shares = parse_share_count(row[column])
+                if shares is not None:
+                    return shares
+    return None
+
+
+def extract_institution_unlocked(soup):
+    """의무보유확약기간별 배정현황 표의 미확약 행에서 오른쪽에서 두 번째 값(합계 수량)을 읽는다."""
+    for rows in tables_after(soup, "의무보유확약기간별 배정현황"):
+        for row in rows:
+            if row and row[0] == "미확약" and len(row) >= 3:
+                return parse_share_count(row[-2])
+    return None
+
+
+DART_BASE_URL = "https://dart.fss.or.kr"
+DART_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+}
+
+
+def extract_dart_rcp_nos(detail_html: str):
+    """38 상세페이지의 공시 링크(viewDetail2)에서 DART 접수번호를 최신순으로 읽는다."""
+    found = []
+    for rcp_no in re.findall(r"viewDetail2\('(\d{14})'\)", detail_html or ""):
+        if rcp_no not in found:
+            found.append(rcp_no)
+    return found
+
+
+def dart_get(url: str) -> str:
+    res = requests.get(url, headers=DART_HEADERS, timeout=15)
+    res.raise_for_status()
+    res.encoding = "utf-8"
+    return res.text
+
+
+def find_issuance_report_rcp_no(main_html: str) -> str:
+    """DART 문서의 관련문서 목록에서 증권발행실적보고서 접수번호를 찾는다."""
+    match = re.search(r'value="rcpNo=(\d{14})"[^>]*title="증권발행실적보고서"', main_html)
+    return match.group(1) if match else ""
+
+
+def parse_dart_toc(main_html: str):
+    """DART 뷰어 목차(node1[...]) 블록을 dict 목록으로 파싱한다."""
+    nodes = []
+    for block in re.split(r"var node1 = \{\};", main_html)[1:]:
+        node = dict(re.findall(r"node1\['(\w+)'\]\s*=\s*\"([^\"]*)\"", block))
+        if node.get("dcmNo") and node.get("eleId"):
+            nodes.append(node)
+    return nodes
+
+
+def fetch_dart_allocation(rcp_nos):
+    """증권발행실적보고서에서 (일반투자자 배정, 기관 미확약) 수량을 가져온다. 실패 시 None."""
+    report_rcp_no = ""
+    for rcp_no in rcp_nos[:3]:
+        try:
+            report_rcp_no = find_issuance_report_rcp_no(
+                dart_get(f"{DART_BASE_URL}/dsaf001/main.do?rcpNo={rcp_no}"))
+        except Exception as e:
+            print(f"⚠️ DART 관련문서 조회 실패({rcp_no}): {e}")
+        if report_rcp_no:
+            break
+    if not report_rcp_no:
+        print("⏳ 증권발행실적보고서 미공시")
+        return None
+
+    nodes = parse_dart_toc(dart_get(f"{DART_BASE_URL}/dsaf001/main.do?rcpNo={report_rcp_no}"))
+    # 청약 및 배정 목차를 우선 조회하고, 목차명이 다르면 나머지 목차도 순서대로 확인한다.
+    nodes.sort(key=lambda n: 0 if "배정" in n.get("text", "") else 1)
+    retail = unlocked = None
+    for node in nodes:
+        params = "&".join(f"{key}={node.get(key, '')}" for key in
+                          ("rcpNo", "dcmNo", "eleId", "offset", "length", "dtd"))
+        soup = BeautifulSoup(dart_get(f"{DART_BASE_URL}/report/viewer.do?{params}"), "html.parser")
+        retail = retail if retail is not None else extract_retail_allocation(soup)
+        unlocked = unlocked if unlocked is not None else extract_institution_unlocked(soup)
+        if retail is not None and unlocked is not None:
+            print(f"📑 DART 증권발행실적보고서({report_rcp_no}) 일반 {retail:,}주 / 미확약 {unlocked:,}주")
+            return retail, unlocked
+    print(f"⚠️ DART 증권발행실적보고서({report_rcp_no})에서 배정 표를 찾지 못함")
+    return None
 
 
 def clean_text(text):
@@ -298,16 +415,23 @@ def run_stock_crawler():
             else:
                 detail_desc = "신규상장 예정 종목"
             confirmed_price = ""
-            floating_shares = ""
+            total_shares = ""
+            retail_shares = None
+            unlocked_shares = None
             floating_amount = ""
             detail_loaded = False
             if existing_doc:
                 # 일부 항목이 일시적으로 사라져도 기존에 수집한 값은 보존한다.
                 for line in existing_detail.splitlines():
-                    if line.startswith("공모가:"):
-                        confirmed_price = parse_offer_price(line.split(":", 1)[1])
-                    elif line.startswith("유통가능물량:"):
-                        floating_shares = line.split(":", 1)[1].strip()
+                    key, _, value = line.partition(":")
+                    if key == "공모가":
+                        confirmed_price = parse_offer_price(value)
+                    elif key == "공모후 주식수 합계":
+                        total_shares = value.strip()
+                    elif key == "일반투자자 배정":
+                        retail_shares = parse_share_count(value)
+                    elif key == "기관투자자 배정 미확약":
+                        unlocked_shares = parse_share_count(value)
 
             try:
                 detail_res = session.get(detail_url, headers=headers, verify=False, timeout=15)
@@ -319,12 +443,23 @@ def run_stock_crawler():
                     # 1. 확정공모가 추적
                     confirmed_price = extract_confirmed_price(detail_soup) or confirmed_price
 
-                    # 2. 병합된 헤더로 유통가능 주식수·지분율 열을 식별한다.
-                    floating_shares = extract_floating_shares(detail_soup) or floating_shares
+                    # 2. 주주구성 표의 '공모 후' 주식수 합계
+                    total_shares = extract_post_ipo_total_shares(detail_soup) or total_shares
+
+                    # 3. 유통가능물량은 DART 증권발행실적보고서의 배정 결과로 계산한다.
+                    rcp_nos = extract_dart_rcp_nos(detail_res.text)
+                    if rcp_nos:
+                        try:
+                            allocation = fetch_dart_allocation(rcp_nos)
+                        except Exception as dart_e:
+                            allocation = None
+                            print(f"⚠️ {stock_name} DART 배정현황 조회 실패: {dart_e}")
+                        if allocation:
+                            retail_shares, unlocked_shares = allocation
 
                     detail_loaded = True
 
-                    # 3. OpenAI 요약 파트 (신규 종목일 때만 수행 - 기존 종목은 저장된 요약을 재사용)
+                    # 4. OpenAI 요약 파트 (신규 종목일 때만 수행 - 기존 종목은 저장된 요약을 재사용)
                     page_text = detail_soup.get_text()
                     if not existing_doc and ("1." in page_text or "사업현황" in page_text):
                         cleaned_page_text = clean_text(page_text)
@@ -348,11 +483,15 @@ def run_stock_crawler():
                 })
                 continue
 
+            floating_shares = None
+            if retail_shares is not None and unlocked_shares is not None:
+                floating_shares = retail_shares + unlocked_shares
+
             # 금액 연산 파트
             if confirmed_price and floating_shares:
                 try:
                     num_price = int(re.sub(r'[^\d]', '', confirmed_price))
-                    num_shares = int(re.sub(r'[^\d]', '', floating_shares.split('주')[0]))
+                    num_shares = floating_shares
                     calc_amount_billion = round((num_price * num_shares) / 100000000)
                     if calc_amount_billion > 0:
                         color_circle = "🔴" if calc_amount_billion >= 1000 else "🔵"
@@ -368,13 +507,26 @@ def run_stock_crawler():
             else:
                 detail_desc = f"{detail_desc}\n공모가: 미정"
 
-            if floating_shares:
-                detail_desc = f"{detail_desc}\n유통가능물량: {floating_shares}"
+            if total_shares:
+                detail_desc = f"{detail_desc}\n공모후 주식수 합계: {total_shares}"
+
+            if floating_shares is not None:
+                floating_text = f"{floating_shares:,}주"
+                total_num = parse_share_count(total_shares)
+                if total_num:
+                    floating_text += f"({floating_shares / total_num * 100:.2f}%)"
+                detail_desc = (f"{detail_desc}\n유통가능물량: {floating_text}"
+                               f"\n일반투자자 배정: {retail_shares:,}주"
+                               f"\n기관투자자 배정 미확약: {unlocked_shares:,}주")
+            else:
+                detail_desc = f"{detail_desc}\n유통가능물량: 증권발행실적보고서 공시 대기중"
 
             if floating_amount:
                 detail_desc = f"{detail_desc}\n유통가능액수: {floating_amount}"
             elif not confirmed_price:
                 detail_desc = f"{detail_desc}\n유통가능액수: 공모가 확정 대기중"
+            elif floating_shares is None:
+                detail_desc = f"{detail_desc}\n유통가능액수: 증권발행실적보고서 공시 대기중"
 
             if existing_doc:
                 # 💡 기존에 등록된 일정 - detail 내용에 실질적인 변화(공모가 확정 등)가 있을 때만 갱신한다.
