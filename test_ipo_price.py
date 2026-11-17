@@ -1,4 +1,6 @@
+import io
 import unittest
+import zipfile
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -136,10 +138,56 @@ class BusinessSectionTests(unittest.TestCase):
         ai.assert_not_called()
 
 
+class OpenDartTests(unittest.TestCase):
+    XML = """<DOCUMENT><BODY>
+    <P>4. 일반투자자 세부 배정현황</P>
+    <TABLE><TBODY><TR><TH ROWSPAN="2">청약단위</TH><TH COLSPAN="2">배정</TH><TH ROWSPAN="2">총배정수량(D=B+C)</TH></TR>
+    <TR><TH>균등</TH><TH>비례</TH></TR>
+    <TR><TE>20</TE><TE>1</TE><TE>2</TE><TE>205,188</TE></TR>
+    <TR><TE>합 계</TE><TE>275,000</TE><TE>275,000</TE><TE>550,000</TE></TR></TBODY></TABLE>
+    <P>5. 기관투자자 의무보유확약기간별 배정현황</P>
+    <TABLE><TR><TE>(단위 : 주, %)</TE></TR></TABLE>
+    <TABLE><TR><TH>확약기간</TH><TH>수량</TH><TH>비중</TH></TR>
+    <TR><TE>미확약</TE><TE>333,705</TE><TE>21.22</TE></TR></TABLE>
+    </BODY></DOCUMENT>"""
+
+    def responses(self, list_status="000"):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("20261110000258.xml", self.XML)
+        listing = Mock()
+        listing.json.return_value = {"status": list_status, "total_page": 1, "list": [
+            {"corp_name": "옵토닉스", "report_nm": "증권발행실적보고서", "rcept_no": "20261110000258"},
+            {"corp_name": "옵토닉스", "report_nm": "투자설명서", "rcept_no": "20261029000524"},
+        ]}
+        return [listing, Mock(content=buffer.getvalue(), text="")]
+
+    def test_api_report_is_parsed(self):
+        with patch.object(crawler.requests, "get", side_effect=self.responses()) as get, \
+                patch.dict(crawler.OPENDART_CACHE, clear=True), \
+                patch.dict(crawler.os.environ, {"OPENDART_API_KEY": "k"}), redirect_stdout(StringIO()):
+            self.assertEqual(crawler.fetch_allocation("옵토닉스", []), (550_000, 333_705))
+        self.assertEqual(get.call_args_list[1].kwargs["params"]["rcept_no"], "20261110000258")
+
+    def test_unfiled_report_returns_none(self):
+        with patch.object(crawler.requests, "get", side_effect=self.responses()), \
+                patch.dict(crawler.OPENDART_CACHE, clear=True), \
+                patch.dict(crawler.os.environ, {"OPENDART_API_KEY": "k"}), redirect_stdout(StringIO()):
+            self.assertIsNone(crawler.fetch_allocation("아델", []))
+
+    def test_api_error_falls_back_to_web(self):
+        with patch.object(crawler.requests, "get", side_effect=self.responses("020")), \
+                patch.object(crawler, "fetch_dart_allocation", return_value=(1, 2)) as web, \
+                patch.dict(crawler.OPENDART_CACHE, clear=True), \
+                patch.dict(crawler.os.environ, {"OPENDART_API_KEY": "k"}), redirect_stdout(StringIO()):
+            self.assertEqual(crawler.fetch_allocation("옵토닉스", ["20261029000504"]), (1, 2))
+        web.assert_called_once_with(["20261029000504"])
+
+
 class ExistingEventTests(unittest.TestCase):
     def run_crawler(self, price="12,400원", status=200, error=None, today=None,
                     stock_name="이에스티", listing_date="2026/11/04", float_html="",
-                    existing_detail=None, allocation=None, dart_error=None):
+                    existing_detail=None, allocation=None, dart_error=None, expect_dart=True):
         document = Mock()
         document.to_dict.return_value = {
             "eventName": f"{stock_name} 상장",
@@ -179,8 +227,10 @@ class ExistingEventTests(unittest.TestCase):
             self.assertEqual(session.get.call_count, 2)
         clock.now.assert_any_call(ZoneInfo("Asia/Seoul"))
         events.add.assert_not_called()
-        if allocation:
+        if (allocation or dart_error) and expect_dart:
             dart.assert_called_once_with(["20261029000504"])
+        elif not expect_dart:
+            dart.assert_not_called()
         return document
 
     def test_confirmed_price_is_refreshed_and_amount_recalculated(self):
@@ -227,22 +277,19 @@ class ExistingEventTests(unittest.TestCase):
         self.assertIn("유통가능물량: 증권발행실적보고서 공시 대기중", detail)
         self.assertIn("유통가능액수: 증권발행실적보고서 공시 대기중", detail)
 
-    def test_new_dart_allocation_replaces_existing_values(self):
-        document = self.run_crawler(price="10,000원", allocation=(1_000_000, 390_800))
-        detail = document.reference.update.call_args.args[0]["detail"]
-        self.assertIn("유통가능물량: 1,390,800주(10.00%)", detail)
-        self.assertIn("일반투자자 배정: 1,000,000주", detail)
-        self.assertIn("유통가능액수: 약 139억 원", detail)
-        self.assertNotIn("5,243,400주", detail)
+    def test_stored_allocation_skips_dart_lookup(self):
+        document = self.run_crawler(price="10,000원", allocation=(1, 1), expect_dart=False)
+        document.reference.update.assert_not_called()
 
     def test_dart_connection_failure_is_not_reported_as_pending(self):
         with patch.object(crawler.requests, "get", side_effect=crawler.requests.ConnectTimeout("t")) as get, \
-                patch.dict(crawler.DART_STATE, {"down": False}), redirect_stdout(StringIO()):
+                patch.dict(crawler.DART_STATE, {"down": False}), \
+                patch.object(crawler, "DART_RETRY_WAITS", (0, 0)), redirect_stdout(StringIO()):
             with self.assertRaises(crawler.DartUnavailable):
                 crawler.fetch_dart_allocation(["20261110000253", "20261015000329"])
             with self.assertRaises(crawler.DartUnavailable):
                 crawler.fetch_dart_allocation(["20261029000504"])
-        self.assertEqual(get.call_count, 1)  # 첫 실패 후 같은 실행에서는 재시도하지 않음
+        self.assertEqual(get.call_count, 3)  # 재시도 2회 후 포기, 이후 같은 실행에서는 요청하지 않음
 
     def test_dart_failure_label_in_detail(self):
         document = self.run_crawler(existing_detail="정전척 개발 및 제조\n공모가: 10,000원",

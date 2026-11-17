@@ -1,3 +1,6 @@
+import io
+import time
+import zipfile
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
@@ -81,7 +84,7 @@ def expand_table_grid(table):
     rows = [row for row in table.find_all("tr") if row.find_parent("table") is table]
     for row_index, row in enumerate(rows):
         column = 0
-        for cell in row.find_all(["th", "td"], recursive=False):
+        for cell in row.find_all(["th", "td", "te", "tu"], recursive=False):
             while (row_index, column) in grid:
                 column += 1
             text = re.sub(r"\s+", "", cell.get_text()) if not cell.find("table") else ""
@@ -203,14 +206,22 @@ class DartUnavailable(Exception):
 DART_STATE = {"down": False}
 
 
+DART_RETRY_WAITS = (3, 10)
+
+
 def dart_get(url: str) -> str:
+    """DART 웹은 연속 요청 시 간헐적으로 연결을 끊으므로 짧게 쉬었다가 재시도한다."""
     if DART_STATE["down"]:
         raise DartUnavailable("이번 실행에서 DART 접속 불가로 판정됨")
-    try:
-        res = requests.get(url, headers=DART_HEADERS, timeout=(5, 15))
-    except (requests.ConnectionError, requests.Timeout) as e:
-        DART_STATE["down"] = True
-        raise DartUnavailable(f"DART 접속 실패: {e}") from e
+    for attempt in range(len(DART_RETRY_WAITS) + 1):
+        try:
+            res = requests.get(url, headers=DART_HEADERS, timeout=(5, 15))
+            break
+        except (requests.ConnectionError, requests.Timeout) as e:
+            if attempt == len(DART_RETRY_WAITS):
+                DART_STATE["down"] = True
+                raise DartUnavailable(f"DART 접속 실패: {e}") from e
+            time.sleep(DART_RETRY_WAITS[attempt])
     res.raise_for_status()
     res.encoding = "utf-8"
     return res.text
@@ -230,6 +241,86 @@ def parse_dart_toc(main_html: str):
         if node.get("dcmNo") and node.get("eleId"):
             nodes.append(node)
     return nodes
+
+
+OPENDART_URL = "https://opendart.fss.or.kr/api"
+OPENDART_CACHE = {}
+
+
+def normalize_corp_name(name: str) -> str:
+    return re.sub(r"\s+|\(주\)|㈜|주식회사|\(유가\)|\(코스닥\)", "", name or "")
+
+
+def opendart_issuance_reports(api_key: str):
+    """최근 90일 발행공시 중 증권발행실적보고서를 {회사명: 접수번호}로 한 번만 읽는다."""
+    if "reports" in OPENDART_CACHE:
+        return OPENDART_CACHE["reports"]
+    today = datetime.now(ZoneInfo("Asia/Seoul")).date()
+    begin = today.fromordinal(today.toordinal() - 89)
+    reports = {}
+    for page in range(1, 11):
+        res = requests.get(f"{OPENDART_URL}/list.json", timeout=(5, 20), params={
+            "crtfc_key": api_key, "bgn_de": begin.strftime("%Y%m%d"), "end_de": today.strftime("%Y%m%d"),
+            "pblntf_ty": "C", "page_no": page, "page_count": 100,
+        })
+        data = res.json()
+        if data.get("status") == "013":  # 조회 결과 없음
+            break
+        if data.get("status") != "000":
+            raise DartUnavailable(f"OpenDART list 오류 {data.get('status')}: {data.get('message')}")
+        for item in data.get("list", []):
+            if "증권발행실적보고서" in item.get("report_nm", ""):
+                # 최신 공시가 먼저 오므로 처음 본 접수번호를 유지한다. (정정 보고서 우선)
+                reports.setdefault(normalize_corp_name(item.get("corp_name")), item.get("rcept_no"))
+        if page >= int(data.get("total_page", 1)):
+            break
+    OPENDART_CACHE["reports"] = reports
+    return reports
+
+
+def opendart_document_soup(api_key: str, rcept_no: str):
+    res = requests.get(f"{OPENDART_URL}/document.xml", timeout=(5, 30),
+                       params={"crtfc_key": api_key, "rcept_no": rcept_no})
+    if not res.content.startswith(b"PK"):
+        raise DartUnavailable(f"OpenDART 원문 오류: {res.text[:120]}")
+    texts = []
+    with zipfile.ZipFile(io.BytesIO(res.content)) as archive:
+        for name in archive.namelist():
+            raw = archive.read(name)
+            for encoding in ("utf-8", "euc-kr"):
+                try:
+                    texts.append(raw.decode(encoding))
+                    break
+                except UnicodeDecodeError:
+                    continue
+    return BeautifulSoup("\n".join(texts), "html.parser")
+
+
+def fetch_opendart_allocation(stock_name: str, api_key: str):
+    """OpenDART API로 증권발행실적보고서 배정 수량을 읽는다. 미공시면 None."""
+    rcept_no = opendart_issuance_reports(api_key).get(normalize_corp_name(stock_name))
+    if not rcept_no:
+        print("⏳ 증권발행실적보고서 미공시 (OpenDART)")
+        return None
+    soup = opendart_document_soup(api_key, rcept_no)
+    retail, unlocked = extract_retail_allocation(soup), extract_institution_unlocked(soup)
+    if retail is None or unlocked is None:
+        raise DartUnavailable(f"OpenDART 원문({rcept_no})에서 배정 표를 찾지 못함")
+    print(f"📑 OpenDART 증권발행실적보고서({rcept_no}) 일반 {retail:,}주 / 미확약 {unlocked:,}주")
+    return retail, unlocked
+
+
+def fetch_allocation(stock_name: str, rcp_nos):
+    """OpenDART 키가 있으면 API를 우선 쓰고, 실패하면 DART 웹 조회로 넘어간다."""
+    api_key = os.environ.get("OPENDART_API_KEY")
+    if api_key:
+        try:
+            return fetch_opendart_allocation(stock_name, api_key)
+        except Exception as e:
+            print(f"⚠️ OpenDART 조회 실패 - DART 웹으로 재시도: {e}")
+    if not rcp_nos:
+        return None
+    return fetch_dart_allocation(rcp_nos)
 
 
 def fetch_dart_allocation(rcp_nos):
@@ -475,10 +566,11 @@ def run_stock_crawler():
                     total_shares = extract_post_ipo_total_shares(detail_soup) or total_shares
 
                     # 3. 유통가능물량은 DART 증권발행실적보고서의 배정 결과로 계산한다.
+                    # 배정 결과는 공시 후 바뀌지 않으므로 이미 저장된 종목은 DART를 다시 조회하지 않는다.
                     rcp_nos = extract_dart_rcp_nos(detail_res.text)
-                    if rcp_nos:
+                    if retail_shares is None or unlocked_shares is None:
                         try:
-                            allocation = fetch_dart_allocation(rcp_nos)
+                            allocation = fetch_allocation(stock_name, rcp_nos)
                         except Exception as dart_e:
                             allocation = None
                             dart_failed = True

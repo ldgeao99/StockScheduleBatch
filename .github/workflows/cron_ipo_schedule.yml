@@ -32,5 +32,6 @@ jobs:
     - name: 🚀 주식 크롤러 배치 스크립트 실행 (38커뮤니케이션 IPO 일정)
       env:
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        OPENDART_API_KEY: ${{ secrets.OPENDART_API_KEY }}
       run: |
         python crawl_ipo_schedule.py
