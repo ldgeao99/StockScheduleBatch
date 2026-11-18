@@ -622,19 +622,15 @@ def run_stock_crawler():
             else:
                 detail_desc = f"{detail_desc}\n공모가: 미정"
 
-            if total_shares:
-                detail_desc = f"{detail_desc}\n공모후 주식수 합계: {total_shares}"
-
+            # 상단: 유통가능물량·액수 / 빈 줄 / 하단: 산출 근거(공모후 주식수, 배정 내역)
+            pending = "DART 조회 실패 - 다음 실행 때 재조회" if dart_failed else "증권발행실적보고서 공시 대기중"
             if floating_shares is not None:
                 floating_text = f"{floating_shares:,}주"
                 total_num = parse_share_count(total_shares)
                 if total_num:
                     floating_text += f"({floating_shares / total_num * 100:.2f}%)"
-                detail_desc = (f"{detail_desc}\n유통가능물량: {floating_text}"
-                               f"\n일반투자자 배정: {retail_shares:,}주"
-                               f"\n기관투자자 배정 미확약: {unlocked_shares:,}주")
+                detail_desc = f"{detail_desc}\n유통가능물량: {floating_text}"
             else:
-                pending = "DART 조회 실패 - 다음 실행 때 재조회" if dart_failed else "증권발행실적보고서 공시 대기중"
                 detail_desc = f"{detail_desc}\n유통가능물량: {pending}"
 
             if floating_amount:
@@ -643,6 +639,15 @@ def run_stock_crawler():
                 detail_desc = f"{detail_desc}\n유통가능액수: 공모가 확정 대기중"
             elif floating_shares is None:
                 detail_desc = f"{detail_desc}\n유통가능액수: {pending}"
+
+            basis_lines = []
+            if total_shares:
+                basis_lines.append(f"공모후 주식수 합계: {total_shares}")
+            if floating_shares is not None:
+                basis_lines.append(f"일반투자자 배정: {retail_shares:,}주")
+                basis_lines.append(f"기관투자자 배정 미확약: {unlocked_shares:,}주")
+            if basis_lines:
+                detail_desc = f"{detail_desc}\n\n" + "\n".join(basis_lines)
 
             if existing_doc:
                 # 💡 기존에 등록된 일정 - detail 내용에 실질적인 변화(공모가 확정 등)가 있을 때만 갱신한다.

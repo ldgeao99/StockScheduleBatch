@@ -191,9 +191,9 @@ class ExistingEventTests(unittest.TestCase):
         document = Mock()
         document.to_dict.return_value = {
             "eventName": f"{stock_name} 상장",
-            "detail": "정전척 개발 및 제조\n공모가: 10,000원\n공모후 주식수 합계: 13,908,000주\n"
-                      "유통가능물량: 5,243,400주(37.70%)\n일반투자자 배정: 3,000,000주\n"
-                      "기관투자자 배정 미확약: 2,243,400주\n유통가능액수: 약 524억 원 🔵",
+            "detail": "정전척 개발 및 제조\n공모가: 10,000원\n유통가능물량: 5,243,400주(37.70%)\n"
+                      "유통가능액수: 약 524억 원 🔵\n\n공모후 주식수 합계: 13,908,000주\n"
+                      "일반투자자 배정: 3,000,000주\n기관투자자 배정 미확약: 2,243,400주",
         }
         if existing_detail is not None:
             document.to_dict.return_value["detail"] = existing_detail
@@ -265,11 +265,12 @@ class ExistingEventTests(unittest.TestCase):
         detail = document.reference.update.call_args.args[0]["detail"]
         self.assertEqual(detail, "광학식 자이로스코프 제조 및 개발\n"
                                  "공모가: 12,000원\n"
-                                 "공모후 주식수 합계: 9,566,000주\n"
                                  "유통가능물량: 883,705주(9.24%)\n"
+                                 "유통가능액수: 약 106억 원 🔵\n"
+                                 "\n"
+                                 "공모후 주식수 합계: 9,566,000주\n"
                                  "일반투자자 배정: 550,000주\n"
-                                 "기관투자자 배정 미확약: 333,705주\n"
-                                 "유통가능액수: 약 106억 원 🔵")
+                                 "기관투자자 배정 미확약: 333,705주")
 
     def test_missing_dart_report_is_marked_pending(self):
         document = self.run_crawler(existing_detail="정전척 개발 및 제조\n공모가: 10,000원")
